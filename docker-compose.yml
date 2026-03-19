@@ -1,0 +1,33 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - LLM_PROVIDER=${LLM_PROVIDER:-stub}
+      - OPENAI_COMPAT_BASE_URL=${OPENAI_COMPAT_BASE_URL:-}
+      - OPENAI_COMPAT_API_KEY=${OPENAI_COMPAT_API_KEY:-}
+      - OPENAI_COMPAT_MODEL=${OPENAI_COMPAT_MODEL:-}
+      - GIGACHAT_BASE_URL=${GIGACHAT_BASE_URL:-https://gigachat.devices.sberbank.ru/api/v1}
+      - GIGACHAT_API_KEY=${GIGACHAT_API_KEY:-}
+      - GIGACHAT_AUTHORIZATION_KEY=${GIGACHAT_AUTHORIZATION_KEY:-}
+      - GIGACHAT_MODEL=${GIGACHAT_MODEL:-}
+      - GIGACHAT_VERIFY_TLS=${GIGACHAT_VERIFY_TLS:-false}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-*}
+    volumes:
+      - ./backend:/app
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_BASE_URL=${VITE_API_BASE_URL:-http://localhost:8000}
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
