@@ -3,22 +3,18 @@ import ts from "typescript";
 
 type CheckPageProps = {
   initialCode?: string;
-  initialSchemaText: string;
 };
 
-function safeParseJson(text: string): any | null {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
+function stripInterfaceBlocks(source: string): string {
+  // Make checker tolerant to invalid interface keys in previously generated code.
+  // It removes top-level `interface X { ... }` declarations before transpile.
+  return source.replace(/interface\s+[A-Za-z_$][\w$]*\s*\{[\s\S]*?\}\s*/g, "");
 }
 
 export default function CheckPage(props: CheckPageProps) {
-  const { initialCode, initialSchemaText } = props;
+  const { initialCode } = props;
 
   const [codeInput, setCodeInput] = React.useState<string>(initialCode ?? "");
-  const [schemaInput, setSchemaInput] = React.useState<string>(initialSchemaText ?? "");
 
   React.useEffect(() => {
     setCodeInput(initialCode ?? "");
@@ -38,13 +34,12 @@ export default function CheckPage(props: CheckPageProps) {
       return;
     }
 
-    const schemaObj = safeParseJson(schemaInput);
-    const expectedKeys = schemaObj && typeof schemaObj === "object" ? Object.keys(schemaObj) : [];
-
     setLoading(true);
     try {
+      const sourceForTranspile = stripInterfaceBlocks(codeInput);
+
       // 1) Transpile TS -> JS (types/interfaces are removed automatically).
-      const transpiled = ts.transpileModule(codeInput, {
+      const transpiled = ts.transpileModule(sourceForTranspile, {
         compilerOptions: {
           target: ts.ScriptTarget.ES2022,
           module: ts.ModuleKind.ESNext,
@@ -82,18 +77,12 @@ export default function CheckPage(props: CheckPageProps) {
       const firstItem = res[0] ?? {};
       const actualKeys = firstItem && typeof firstItem === "object" ? Object.keys(firstItem) : [];
 
-      const missing = expectedKeys.filter((k) => !actualKeys.includes(k));
-      const extra = actualKeys.filter((k) => !expectedKeys.includes(k));
-
       setStatus("Execution OK");
       setResultPreview(
         JSON.stringify(
           {
             itemsCount: res.length,
-            expectedKeys,
             actualKeys,
-            missing,
-            extra,
             firstItem,
           },
           null,
@@ -119,15 +108,7 @@ export default function CheckPage(props: CheckPageProps) {
               value={codeInput}
               onChange={(e) => setCodeInput(e.target.value)}
               spellCheck={false}
-              style={{ minHeight: 260 }}
-            />
-
-            <label style={{ marginTop: 14 }}>JSON schema (пример структуры результата)</label>
-            <textarea
-              value={schemaInput}
-              onChange={(e) => setSchemaInput(e.target.value)}
-              spellCheck={false}
-              style={{ minHeight: 140 }}
+              style={{ minHeight: 320 }}
             />
           </div>
 

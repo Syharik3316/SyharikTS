@@ -72,7 +72,7 @@ export default function App() {
             Проверка TS
           </button>
           <div style={{ opacity: 0.8, fontSize: 13 }}>
-            {page === "check" ? "Код используется из последней генерации." : "Сначала сгенерируйте код."}
+            {page === "check" ? "Вставьте TS-код и проверьте результат." : "Сначала сгенерируйте код."}
           </div>
         </div>
       </div>
@@ -121,7 +121,7 @@ export default function App() {
           </div>
         </div>
       ) : (
-        <CheckPage initialCode={code} initialSchemaText={schemaText} />
+        <CheckPage initialCode={code} />
       )}
     </>
   );

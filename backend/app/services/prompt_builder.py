@@ -29,7 +29,10 @@ def build_interface_ts(schema_obj: Any, *, interface_name: str = "DealData") -> 
     # Keep order stable by insertion order in dict (Python 3.7+).
     for k, v in obj.items():
         ts_t = _infer_ts_type(v)
-        fields.append(f"{k}: {ts_t};")
+        # Always use quoted property names to keep TS valid for keys
+        # with spaces, punctuation or non-latin characters.
+        key_ts = json.dumps(str(k), ensure_ascii=False)
+        fields.append(f"{key_ts}: {ts_t};")
     body = "\n  ".join(fields)
     return f"interface {interface_name} {{\n  {body}\n}}"
 

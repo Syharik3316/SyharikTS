@@ -25,7 +25,12 @@ async def generate(
         raise HTTPException(status_code=400, detail=f"Invalid schema JSON: {e}")
 
     try:
-        file_kind, extracted_input_json = await extract_extracted_input(file)
+        # Keep prompt compact to reduce token usage and truncation risk.
+        file_kind, extracted_input_json = await extract_extracted_input(
+            file,
+            max_rows=8,
+            max_text_chars=3500,
+        )
     except ValueError as e:
         raise HTTPException(status_code=415, detail=str(e))
     except Exception as e:

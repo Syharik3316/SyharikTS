@@ -44,6 +44,33 @@ def extract_typescript_code(text: str) -> str:
     return text.strip()
 
 
+def looks_like_incomplete_typescript(code: str) -> bool:
+    """
+    Heuristic check for truncated model output.
+    We keep it intentionally simple and fast.
+    """
+    if not code or "export default function" not in code:
+        return True
+
+    stripped = code.strip()
+    if stripped.endswith(",") or stripped.endswith(":") or stripped.endswith("="):
+        return True
+
+    # Very common truncation pattern from mapping line.
+    if 'get(row, "' in stripped and not stripped.endswith("}"):
+        return True
+
+    # Rough balance checks.
+    if code.count("{") != code.count("}"):
+        return True
+    if code.count("(") != code.count(")"):
+        return True
+    if code.count("[") != code.count("]"):
+        return True
+
+    return False
+
+
 _NON_ALNUM_RE = re.compile(r"[^a-zA-Z0-9]+")
 
 

@@ -8,6 +8,7 @@ import requests
 
 from app.utils.helpers import (
     extract_typescript_code,
+    looks_like_incomplete_typescript,
     ensure_json_object,
     best_match_key,
 )
@@ -160,12 +161,15 @@ class LLMClient:
         token, _expires_at = self._get_gigachat_access_token(auth_key=auth_key, verify_tls=verify_tls)
 
         chat_url = f"{base_url}/chat/completions"
+        max_tokens = int((os.getenv("GIGACHAT_MAX_TOKENS") or "1400").strip() or "1400")
+        timeout_sec = int((os.getenv("GIGACHAT_TIMEOUT_SECONDS") or "90").strip() or "90")
+
         payload = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "stream": False,
             "temperature": 0,
-            "max_tokens": 512,
+            "max_tokens": max_tokens,
             "n": 1,
             "repetition_penalty": 1,
             "update_interval": 0,
@@ -176,7 +180,7 @@ class LLMClient:
             "Authorization": f"Bearer {token}",
         }
 
-        resp = requests.post(chat_url, headers=headers, json=payload, timeout=90, verify=verify_tls)
+        resp = requests.post(chat_url, headers=headers, json=payload, timeout=timeout_sec, verify=verify_tls)
         if resp.status_code != 200:
             try:
                 body = resp.json()
@@ -198,8 +202,48 @@ class LLMClient:
 
         if not content:
             raise RuntimeError("GigaChat returned empty content")
+        code = extract_typescript_code(content)
 
-        return extract_typescript_code(content)
+        # Retry once with stricter short instruction if output seems truncated.
+        if looks_like_incomplete_typescript(code):
+            retry_payload = {
+                "model": model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            "Previous output was truncated. Return FULL TypeScript code from start to end. "
+                            "No markdown, no explanation.\n" + prompt
+                        ),
+                    }
+                ],
+                "stream": False,
+                "temperature": 0,
+                "max_tokens": max(max_tokens, 2200),
+                "n": 1,
+                "repetition_penalty": 1,
+                "update_interval": 0,
+            }
+            retry_resp = requests.post(
+                chat_url,
+                headers=headers,
+                json=retry_payload,
+                timeout=max(timeout_sec, 120),
+                verify=verify_tls,
+            )
+            if retry_resp.status_code == 200:
+                retry_data = retry_resp.json()
+                retry_content = ""
+                if isinstance(retry_data, dict):
+                    choices = retry_data.get("choices") or []
+                    if choices and isinstance(choices, list):
+                        retry_content = ((choices[0] or {}).get("message") or {}).get("content") or ""
+                if retry_content:
+                    code_retry = extract_typescript_code(retry_content)
+                    if code_retry and not looks_like_incomplete_typescript(code_retry):
+                        return code_retry
+
+        return code
 
     _gigachat_token_cache: Optional[Tuple[str, float]] = None
 

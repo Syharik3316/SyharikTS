@@ -63,6 +63,8 @@ curl -X POST "http://localhost:8000/generate" ^
 - `GIGACHAT_AUTHORIZATION_KEY`
 - `GIGACHAT_MODEL`
 - `GIGACHAT_VERIFY_TLS` (по умолчанию `false`, отключает проверку SSL для self-signed цепочек)
+- `GIGACHAT_MAX_TOKENS` (по умолчанию `1400`, увеличьте если ответ обрезается)
+- `GIGACHAT_TIMEOUT_SECONDS` (по умолчанию `90`)
 - `OLLAMA_BASE_URL`
 - `CORS_ALLOW_ORIGINS`
 

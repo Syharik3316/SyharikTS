@@ -1,8 +1,5 @@
-import datetime
 import re
-from typing import Any, Dict, List, Optional, Tuple
-
-from app.utils.helpers import ensure_json_object
+from typing import Any, Dict
 
 
 _DATE_KEY_RE = re.compile(r"(date|дата|создан|обнов|last|update)", re.IGNORECASE)
@@ -41,14 +38,18 @@ def _normalize_primitive_value(value: Any, key: str) -> Any:
     Convert extracted string value to an example primitive type for schema inference.
     """
     if value is None:
-        return ""
+        return "string"
 
     if isinstance(value, (int, float, bool)):
-        return value
+        if isinstance(value, bool):
+            return False
+        if isinstance(value, int):
+            return 0
+        return 0.0
 
     s = str(value).strip()
     if not s:
-        return ""
+        return "string"
 
     # Date-like keys always return ISO string.
     if _DATE_KEY_RE.search(key):
@@ -59,30 +60,22 @@ def _normalize_primitive_value(value: Any, key: str) -> Any:
     # Boolean
     sl = s.lower()
     if sl in {"true", "false"}:
-        return sl == "true"
+        return False
     if sl in {"yes", "no", "y", "n"}:
-        return sl in {"yes", "y"}
+        return False
     if sl in {"1", "0"}:
-        # Ambiguous; treat as int for safety.
-        return int(sl)
+        # Ambiguous; use number placeholder.
+        return 0
 
     # Number (int/float)
     if _INT_RE.match(s):
-        try:
-            return int(s)
-        except Exception:
-            return s
+        return 0
 
     if _FLOAT_RE.match(s) and any(ch in s for ch in [".", ","]):
-        try:
-            return float(s.replace(",", "."))
-        except Exception:
-            return s
+        return 0.0
 
-    # Default: string example.
-    if len(s) > 120:
-        return s[:120] + "…"
-    return s
+    # Default placeholder: schema example, not real content.
+    return "string"
 
 
 def infer_schema_from_extracted(file_kind: str, extracted_input_json: Any) -> Dict[str, Any]:
@@ -103,16 +96,8 @@ def infer_schema_from_extracted(file_kind: str, extracted_input_json: Any) -> Di
         return schema
 
     if file_kind in {"pdf", "docx", "png", "jpg"}:
-        # We don't reliably infer table columns from free text in MVP.
-        # Provide a minimal schema that still compiles and is useful for testing.
-        if isinstance(extracted_input_json, dict):
-            text = extracted_input_json.get("text") or ""
-        else:
-            text = ""
-        text = (text or "").strip()
-        if len(text) > 500:
-            text = text[:500] + "…"
-        return {"text": text, "value": "string"}
+        # For free text formats return only generic shape placeholders.
+        return {"text": "string", "value": "string"}
 
     # Unknown
     return {"value": "string"}
