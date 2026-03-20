@@ -61,11 +61,12 @@ export async function generateTsCode(file: File, schemaText: string): Promise<st
   });
 
   if (!res.ok) {
-    const { status, detail } = await parseBackendError(res);
+    const { status, detail, code } = await parseBackendError(res);
     throw new ApiError({
       status,
+      code,
       detail,
-      userMessage: mapStatusToUserMessage(status, detail),
+      userMessage: mapStatusToUserMessage(status, detail, code),
     });
   }
 
@@ -87,11 +88,12 @@ export async function inferSchemaExample(file: File): Promise<string> {
   });
 
   if (!res.ok) {
-    const { status, detail } = await parseBackendError(res);
+    const { status, detail, code } = await parseBackendError(res);
     throw new ApiError({
       status,
+      code,
       detail,
-      userMessage: mapStatusToUserMessage(status, detail),
+      userMessage: mapStatusToUserMessage(status, detail, code),
     });
   }
 

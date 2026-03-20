@@ -3,7 +3,7 @@ import os
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from app.models.schemas import GenerateResponse
-from app.services.file_parser import extract_extracted_input
+from app.services.file_parser import ParseFileError, SUPPORTED_FILE_KINDS, extract_extracted_input
 from app.services.prompt_builder import build_generation_prompt, build_interface_ts
 from app.services.llm_client import LLMClient
 
@@ -22,7 +22,7 @@ def _read_optional_positive_int(name: str) -> int | None:
 
 @router.post("/generate", response_model=GenerateResponse)
 async def generate(
-    file: UploadFile = File(..., description="Uploaded file (CSV/XLS/PDF/DOCX/PNG/JPG)"),
+    file: UploadFile = File(..., description=f"Uploaded file ({'/'.join(k.upper() for k in SUPPORTED_FILE_KINDS)})"),
     schema: str = Form(..., description="JSON-string schema example for output objects"),
 ):
     if not file:
@@ -43,8 +43,11 @@ async def generate(
             max_rows=parse_max_rows,
             max_text_chars=parse_max_text_chars,
         )
+    except ParseFileError as e:
+        status = 415 if e.code == "UNSUPPORTED_FILE_TYPE" else 400
+        raise HTTPException(status_code=status, detail=e.as_detail())
     except ValueError as e:
-        raise HTTPException(status_code=415, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to parse uploaded file: {e}")
 

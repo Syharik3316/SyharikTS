@@ -95,7 +95,7 @@ def infer_schema_from_extracted(file_kind: str, extracted_input_json: Any) -> Di
             schema[str(k)] = _normalize_primitive_value(v, str(k))
         return schema
 
-    if file_kind in {"pdf", "docx", "png", "jpg"}:
+    if file_kind in {"pdf", "docx", "png", "jpg", "tiff", "txt", "md", "rtf", "odt", "xml", "epub", "fb2", "doc"}:
         # For free text formats return only generic shape placeholders.
         return {"text": "string", "value": "string"}
 

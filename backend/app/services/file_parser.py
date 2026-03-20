@@ -1,10 +1,42 @@
 import io
 import os
 import csv
+import re
+import zipfile
+import xml.etree.ElementTree as ET
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 from fastapi import UploadFile
+
+SUPPORTED_FILE_KINDS: tuple[str, ...] = (
+    "csv",
+    "xls",
+    "xlsx",
+    "pdf",
+    "docx",
+    "png",
+    "jpg",
+    "tiff",
+    "txt",
+    "md",
+    "rtf",
+    "odt",
+    "xml",
+    "epub",
+    "fb2",
+    "doc",
+)
+
+
+class ParseFileError(ValueError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+    def as_detail(self) -> Dict[str, str]:
+        return {"code": self.code, "message": self.message}
 
 
 def detect_file_kind(filename: Optional[str], content_type: Optional[str]) -> str:
@@ -26,6 +58,24 @@ def detect_file_kind(filename: Optional[str], content_type: Optional[str]) -> st
         return "png"
     if name.endswith(".jpg") or name.endswith(".jpeg") or "image/jpeg" in ctype:
         return "jpg"
+    if name.endswith(".tif") or name.endswith(".tiff") or "image/tiff" in ctype:
+        return "tiff"
+    if name.endswith(".txt") or "text/plain" in ctype:
+        return "txt"
+    if name.endswith(".md") or "text/markdown" in ctype or "text/x-markdown" in ctype:
+        return "md"
+    if name.endswith(".rtf") or "application/rtf" in ctype or "text/rtf" in ctype:
+        return "rtf"
+    if name.endswith(".odt") or "application/vnd.oasis.opendocument.text" in ctype:
+        return "odt"
+    if name.endswith(".xml") or "application/xml" in ctype or "text/xml" in ctype:
+        return "xml"
+    if name.endswith(".epub") or "application/epub+zip" in ctype:
+        return "epub"
+    if name.endswith(".fb2") or "application/x-fictionbook+xml" in ctype:
+        return "fb2"
+    if name.endswith(".doc") or "application/msword" in ctype:
+        return "doc"
 
     return "unknown"
 
@@ -96,6 +146,96 @@ def _read_csv_dataframe(contents: bytes, *, max_rows: Optional[int]) -> pd.DataF
     )
 
 
+def _decode_text_contents(contents: bytes) -> str:
+    for enc in ("utf-8-sig", "utf-8", "cp1251"):
+        try:
+            return contents.decode(enc)
+        except Exception:
+            continue
+    return contents.decode("utf-8", errors="replace")
+
+
+def _normalize_newlines(text: str) -> str:
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _truncate_text(text: str, max_text_chars: Optional[int]) -> str:
+    if max_text_chars is not None and max_text_chars > 0 and len(text) > max_text_chars:
+        return text[: max_text_chars - 1] + "…"
+    return text
+
+
+def _join_non_empty_lines(lines: List[str]) -> str:
+    return "\n".join([ln.strip() for ln in lines if ln and ln.strip()])
+
+
+def _extract_rtf_text(contents: bytes) -> str:
+    from striprtf.striprtf import rtf_to_text
+
+    raw = _decode_text_contents(contents)
+    return rtf_to_text(raw) or ""
+
+
+def _extract_odt_text(contents: bytes) -> str:
+    from odf import text as odf_text
+    from odf.opendocument import load
+    from odf.teletype import extractText
+
+    doc = load(io.BytesIO(contents))
+    lines: List[str] = []
+    for elem in doc.getElementsByType(odf_text.P):
+        val = extractText(elem)
+        if val:
+            lines.append(val)
+    for elem in doc.getElementsByType(odf_text.H):
+        val = extractText(elem)
+        if val:
+            lines.append(val)
+    return _join_non_empty_lines(lines)
+
+
+def _extract_xml_text(contents: bytes) -> str:
+    xml_text = _decode_text_contents(contents)
+    root = ET.fromstring(xml_text)
+    pieces = [t.strip() for t in root.itertext() if t and t.strip()]
+    return _join_non_empty_lines(pieces)
+
+
+def _extract_epub_text(contents: bytes) -> str:
+    from bs4 import BeautifulSoup
+    from ebooklib import ITEM_DOCUMENT, epub
+
+    with zipfile.ZipFile(io.BytesIO(contents), "r") as zf:
+        with zf.open("META-INF/container.xml") as f:
+            container_xml = f.read().decode("utf-8", errors="replace")
+    container_root = ET.fromstring(container_xml)
+    rootfile_path = ""
+    for elem in container_root.iter():
+        if elem.tag.lower().endswith("rootfile"):
+            rootfile_path = (elem.attrib.get("full-path") or "").strip()
+            break
+    if not rootfile_path:
+        raise ParseFileError(code="TEXT_DECODE_FAILED", message="EPUB container.xml has no rootfile path.")
+
+    book = epub.read_epub(io.BytesIO(contents), options={"ignore_ncx": True})
+    lines: List[str] = []
+    for item in book.get_items_of_type(ITEM_DOCUMENT):
+        html = item.get_content().decode("utf-8", errors="replace")
+        text = BeautifulSoup(html, "html.parser").get_text(separator="\n", strip=True)
+        if text:
+            lines.append(text)
+    return _join_non_empty_lines(lines)
+
+
+def _extract_doc_text(contents: bytes) -> str:
+    # Legacy .doc is binary; use best-effort extraction without external system tools.
+    utf16 = contents.decode("utf-16le", errors="ignore")
+    cp = contents.decode("cp1251", errors="ignore")
+    mix = f"{utf16}\n{cp}"
+    words = re.findall(r"[A-Za-zА-Яа-яЁё0-9][A-Za-zА-Яа-яЁё0-9 .,;:!?()\"'/-]{2,}", mix)
+    return _join_non_empty_lines(words[:2000])
+
+
 def _normalize_broken_semicolon_rows(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     If parser produced one-column rows like {"a;b;c":"1;2;3"}, expand them.
@@ -159,6 +299,46 @@ async def extract_extracted_input(
         records = _normalize_broken_semicolon_rows(records)
         return file_kind, records
 
+    if file_kind in {"txt", "md"}:
+        text = _normalize_newlines(_decode_text_contents(contents))
+        text = _truncate_text(text, max_text_chars)
+        return file_kind, {"text": text}
+
+    if file_kind == "rtf":
+        text = _normalize_newlines(_extract_rtf_text(contents))
+        text = _truncate_text(text, max_text_chars)
+        if not text.strip():
+            raise ParseFileError(code="TEXT_DECODE_FAILED", message="Failed to extract text from RTF file.")
+        return file_kind, {"text": text}
+
+    if file_kind == "odt":
+        text = _normalize_newlines(_extract_odt_text(contents))
+        text = _truncate_text(text, max_text_chars)
+        if not text.strip():
+            raise ParseFileError(code="TEXT_DECODE_FAILED", message="Failed to extract text from ODT file.")
+        return file_kind, {"text": text}
+
+    if file_kind in {"xml", "fb2"}:
+        text = _normalize_newlines(_extract_xml_text(contents))
+        text = _truncate_text(text, max_text_chars)
+        if not text.strip():
+            raise ParseFileError(code="TEXT_DECODE_FAILED", message=f"Failed to extract text from {file_kind.upper()} file.")
+        return file_kind, {"text": text}
+
+    if file_kind == "epub":
+        text = _normalize_newlines(_extract_epub_text(contents))
+        text = _truncate_text(text, max_text_chars)
+        if not text.strip():
+            raise ParseFileError(code="TEXT_DECODE_FAILED", message="Failed to extract text from EPUB file.")
+        return file_kind, {"text": text}
+
+    if file_kind == "doc":
+        text = _normalize_newlines(_extract_doc_text(contents))
+        text = _truncate_text(text, max_text_chars)
+        if not text.strip():
+            raise ParseFileError(code="TEXT_DECODE_FAILED", message="Failed to extract text from DOC file.")
+        return file_kind, {"text": text}
+
     if file_kind == "pdf":
         from PyPDF2 import PdfReader
 
@@ -172,9 +352,7 @@ async def extract_extracted_input(
             except Exception:
                 # Best-effort extraction
                 texts.append("")
-        text = "\n".join(texts).strip()
-        if max_text_chars is not None and len(text) > max_text_chars:
-            text = text[: max_text_chars - 1] + "…"
+        text = _truncate_text(_normalize_newlines("\n".join(texts).strip()), max_text_chars)
         return file_kind, {"text": text}
 
     if file_kind == "docx":
@@ -198,22 +376,42 @@ async def extract_extracted_input(
                 table_data.append(row_data)
             tables.append(table_data)
 
-        text = "\n".join(paragraphs).strip()
-        if max_text_chars is not None and len(text) > max_text_chars:
-            text = text[: max_text_chars - 1] + "…"
+        text = _truncate_text(_normalize_newlines("\n".join(paragraphs).strip()), max_text_chars)
         return file_kind, {"text": text, "tables": tables}
 
-    if file_kind in {"png", "jpg"}:
+    if file_kind in {"png", "jpg", "tiff"}:
         from PIL import Image
+        from PIL import ImageOps
         import pytesseract
 
         image = Image.open(io.BytesIO(contents))
-        # OCR may be slow; keep it simple for MVP.
-        text = pytesseract.image_to_string(image) or ""
-        text = text.strip()
-        if max_text_chars is not None and len(text) > max_text_chars:
-            text = text[: max_text_chars - 1] + "…"
+        ocr_lang = (os.getenv("OCR_LANG") or "eng").strip() or "eng"
+        ocr_psm = (os.getenv("OCR_PSM") or "6").strip() or "6"
+        ocr_fallback_psm = (os.getenv("OCR_FALLBACK_PSM") or "11").strip() or "11"
+
+        if image.mode not in {"L", "RGB"}:
+            image = image.convert("RGB")
+
+        enhanced = ImageOps.autocontrast(image.convert("L"))
+        text = (pytesseract.image_to_string(enhanced, lang=ocr_lang, config=f"--psm {ocr_psm}") or "").strip()
+        if len(text) < 6:
+            second_pass = (
+                pytesseract.image_to_string(enhanced, lang=ocr_lang, config=f"--psm {ocr_fallback_psm}") or ""
+            ).strip()
+            if len(second_pass) > len(text):
+                text = second_pass
+
+        if not text:
+            raise ParseFileError(
+                code="OCR_NO_TEXT",
+                message="Image OCR failed to extract readable text. Try higher quality or clearer image.",
+            )
+
+        text = _truncate_text(_normalize_newlines(text), max_text_chars)
         return file_kind, {"text": text}
 
-    raise ValueError("Unsupported file type")
+    raise ParseFileError(
+        code="UNSUPPORTED_FILE_TYPE",
+        message=f"Unsupported file type. Supported: {', '.join(SUPPORTED_FILE_KINDS)}",
+    )
 

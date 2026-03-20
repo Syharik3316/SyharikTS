@@ -1,11 +1,13 @@
 export class ApiError extends Error {
   status: number;
+  code?: string;
   detail?: string;
   userMessage: string;
 
-  constructor(params: { status: number; userMessage: string; detail?: string }) {
+  constructor(params: { status: number; userMessage: string; detail?: string; code?: string }) {
     super(params.userMessage);
     this.status = params.status;
+    this.code = params.code;
     this.userMessage = params.userMessage;
     this.detail = params.detail;
   }
@@ -16,14 +18,20 @@ export function safeSlice(s: string, maxLen: number): string {
   return s.slice(0, maxLen - 1) + "…";
 }
 
-export async function parseBackendError(res: Response): Promise<{ status: number; detail?: string }> {
+export async function parseBackendError(res: Response): Promise<{ status: number; detail?: string; code?: string }> {
   const status = res.status;
 
   // Try JSON first (FastAPI usually returns {detail: "..."}).
   try {
     const data = (await res.clone().json()) as any;
-    const detail = typeof data?.detail === "string" ? (data.detail as string) : undefined;
-    return { status, detail };
+    if (typeof data?.detail === "string") {
+      return { status, detail: data.detail as string };
+    }
+    if (data?.detail && typeof data.detail === "object") {
+      const code = typeof data.detail.code === "string" ? data.detail.code : undefined;
+      const detail = typeof data.detail.message === "string" ? data.detail.message : undefined;
+      return { status, code, detail };
+    }
   } catch {
     // ignore
   }
@@ -38,7 +46,11 @@ export async function parseBackendError(res: Response): Promise<{ status: number
   }
 }
 
-export function mapStatusToUserMessage(status: number, detail?: string): string {
+export function mapStatusToUserMessage(status: number, detail?: string, code?: string): string {
+  if (code === "UNSUPPORTED_FILE_TYPE") return "Файл данного типа не поддерживается.";
+  if (code === "OCR_NO_TEXT") return "Не удалось распознать текст на изображении. Загрузите более четкое изображение.";
+  if (code === "TEXT_DECODE_FAILED") return "Не удалось корректно прочитать текстовый файл. Проверьте кодировку файла.";
+
   if (status === 401) return "Не удалось выполнить запрос.";
   if (status === 403) {
     return detail ? `Доступ запрещен: ${detail}` : "Доступ запрещен.";
