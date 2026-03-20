@@ -46,6 +46,7 @@ def build_generation_prompt(
     extracted_compact = json.dumps(extracted_input_json, ensure_ascii=False, separators=(",", ":"))
     schema = ensure_json_object(schema_obj)
     schema_keys = list(schema.keys())
+    schema_keys_compact = json.dumps(schema_keys, ensure_ascii=False, separators=(",", ":"))
 
     # Token-minimal: provide a full compilable template with deterministic mapping.
     # The model only needs to return code (we still call it, but the logic is already explicit).
@@ -56,11 +57,24 @@ def build_generation_prompt(
     out_body = "\n".join(out_lines)
 
     return (
-        "Return ONLY TypeScript code (no markdown, no explanation).\n"
+        "Return ONLY TypeScript code. No markdown. No comments. No explanation.\n"
+        "Keep output short and deterministic.\n"
+        "Rules:\n"
+        "1) Use the provided interface and export default function signature exactly.\n"
+        "2) Build rows ONLY from schema keys (ignore unknown columns).\n"
+        "3) If an input row has a single key that contains ';', treat it as a broken CSV row:\n"
+        "   - split that key by ';' to get header columns;\n"
+        "   - split the single value by ';' to get values;\n"
+        "   - map by index header[i] -> value[i].\n"
+        "4) Do not inline huge constants; use compact logic.\n"
+        "Schema keys:\n"
+        f"{schema_keys_compact}\n"
+        "Extracted input JSON:\n"
+        f"{extracted_compact}\n"
         f"{interface_ts}\n"
         "export default function (base64file: string): DealData[] {\n"
         "  void base64file;\n"
-        f"  const extracted = {extracted_compact} as any;\n"
+        "  const extracted = [] as any;\n"
         "  const result: DealData[] = [];\n"
         "  const norm=(s:any)=>String(s??'').toLowerCase().replace(/[^a-z0-9]/g,'');\n"
         "  const get=(row:any, key:string)=>{\n"

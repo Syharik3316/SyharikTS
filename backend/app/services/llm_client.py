@@ -266,22 +266,34 @@ class LLMClient:
         else:
             auth_header = f"Basic {auth_key}"
 
-        payload = {"scope": "GIGACHAT_API_PERS"}
         headers = {
             "Content-Type": "application/x-www-form-urlencoded",
             "Accept": "application/json",
             "RqUID": rq_uid,
             "Authorization": auth_header,
         }
+        configured_scope = (os.getenv("GIGACHAT_SCOPE") or "").strip()
+        scope_candidates: List[str] = []
+        if configured_scope:
+            scope_candidates.append(configured_scope)
+        # Keep backward compatibility with setups where only AUTHORIZATION_KEY was configured.
+        for candidate in ["GIGACHAT_API_PERS", "GIGACHAT_API_B2B", "GIGACHAT_API_CORP"]:
+            if candidate not in scope_candidates:
+                scope_candidates.append(candidate)
 
-        resp = requests.post(
-            oauth_url,
-            headers=headers,
-            data=payload,
-            timeout=60,
-            verify=verify_tls,
-        )
-        if resp.status_code != 200:
+        last_error: str = ""
+        resp = None
+        for scope in scope_candidates:
+            resp = requests.post(
+                oauth_url,
+                headers=headers,
+                data={"scope": scope},
+                timeout=60,
+                verify=verify_tls,
+            )
+            if resp.status_code == 200:
+                break
+
             try:
                 body = resp.json()
             except Exception:
@@ -289,7 +301,18 @@ class LLMClient:
             msg = ""
             if isinstance(body, dict):
                 msg = body.get("error_description") or body.get("error") or json.dumps(body)
-            raise RuntimeError(f"GigaChat OAuth error {resp.status_code}: {msg or resp.text[:300]}")
+            details = msg or resp.text[:300]
+            last_error = f"scope={scope}: {details}"
+
+            # For non-scope errors don't continue; fail fast.
+            if "scope from db not fully includes consumed scope" not in details:
+                raise RuntimeError(f"GigaChat OAuth error {resp.status_code}: {details}")
+
+        if resp is None or resp.status_code != 200:
+            raise RuntimeError(
+                "GigaChat OAuth error 400: scope mismatch for provided GIGACHAT_AUTHORIZATION_KEY. "
+                f"Tried scopes: {', '.join(scope_candidates)}. Last error: {last_error}"
+            )
 
         body = resp.json()
         access_token = body.get("access_token")
