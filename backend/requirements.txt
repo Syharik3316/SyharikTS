@@ -7,6 +7,12 @@ langchain-openai
 pydantic
 python-multipart
 
+# Auth + DB
+sqlalchemy
+pymysql
+passlib[bcrypt]
+python-jose[cryptography]
+
 pandas
 openpyxl
 xlrd
