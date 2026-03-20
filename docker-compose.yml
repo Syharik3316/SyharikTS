@@ -49,7 +49,10 @@ services:
       - MYSQL_ROOT_PASSWORD=${DB_PASSWORD:-change-me}
     volumes:
       - mysql_data:/var/lib/mysql
-    command: ["--default-authentication-plugin=mysql_native_password"]
+    # MySQL 8.4 removed default_authentication_plugin (and the old
+    # --default-authentication-plugin=... flag). Enable mysql_native_password
+    # for compatibility with the PyMySQL client used by the backend.
+    command: ["--mysql-native-password=ON"]
 
   frontend:
     build:
