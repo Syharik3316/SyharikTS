@@ -4,9 +4,63 @@ from typing import Any
 from app.utils.helpers import ensure_json_object
 
 
+_CRM_HEADER_ALIASES = {
+    "actPlanDate": ["Плановая дата акта"],
+    "closeReason": ["Сделка - Причина закрытия"],
+    "closeReasonComment": ["Сделка - Комментарий к причине закрытия"],
+    "creationDate": ["Дата создания"],
+    "creator": ["Сделка - Создал"],
+    "deal": ["Сделка"],
+    "dealCreationDate": ["Сделка - Дата создания"],
+    "dealId": ["Сделка - ID сделки"],
+    "dealIdentifier": ["Сделка - Идентификатор"],
+    "dealLastUpdateDate": ["Сделка - Дата последнего обновления"],
+    "dealName": ["Сделка - Название"],
+    "dealProduct": ["Сделка - Продукт"],
+    "dealRevenueAmount": ["Сделка - Сумма выручки"],
+    "dealSource": ["Сделка - Источник сделки"],
+    "dealStage": ["Сделка - Стадия"],
+    "dealStageFinal": ["Стадия (Сделка)"],
+    "dealStageTransitionDate": ["Сделка - Дата перехода объекта на новую стадию"],
+    "deliveryType": ["Тип поставки"],
+    "description": ["Сделка - Описание"],
+    "directSupply": ["Сделка - Прямая поставка"],
+    "distributor": ["Сделка - Дистрибьютор"],
+    "finalLicenseAmount": ["Сделка - Итоговая сумма лицензий"],
+    "finalServiceAmount": ["Сделка - Итоговая сумма услуг"],
+    "finalServiceAmountByRevenueWithVAT": ["Сделка - Итоговая сумма услуг по выручке (с НДС)"],
+    "finalServiceAmountWithVAT": ["Сделка - Итоговая сумма услуг (с НДС)"],
+    "forecast": ["Сделка - Прогноз"],
+    "identifierRevenue": ["Идентификатор (Выручка)"],
+    "invoiceAmount": ["Сумма акта"],
+    "invoiceAmountWithVAT": ["Сумма акта (с НДС)"],
+    "lastUpdateDate": ["Дата последнего обновления"],
+    "marketingEvent": ["Сделка - Маркетинговое мероприятие"],
+    "organization": ["Сделка - Организация"],
+    "partner": ["Сделка - Партнер по сделке"],
+    "product": ["Продукт"],
+    "quantity": ["Количество"],
+    "responsiblePerson": ["Сделка - Ответственный"],
+    "revenue": ["Выручка"],
+    "siteLead": ["Сделка - Лид с сайта"],
+    "stageTransitionTime": ["Время перехода на текущую стадию"],
+    "totalProductAmount": ["Сделка - Итоговая сумма продуктов"],
+    "unitOfMeasure": ["Единица измерения"],
+}
+
+
+def _build_aliases_for_schema(schema: dict[str, Any]) -> dict[str, list[str]]:
+    aliases: dict[str, list[str]] = {}
+    for key in schema.keys():
+        vals = _CRM_HEADER_ALIASES.get(key, [])
+        if vals:
+            aliases[key] = vals
+    return aliases
+
+
 def _infer_ts_type(value: Any) -> str:
     if value is None:
-        return "any"
+        return "string | null"
     if isinstance(value, bool):
         return "boolean"
     if isinstance(value, (int, float)):
@@ -43,56 +97,109 @@ def build_generation_prompt(
     *,
     interface_ts: str,
 ) -> str:
-    extracted_compact = json.dumps(extracted_input_json, ensure_ascii=False, separators=(",", ":"))
     schema = ensure_json_object(schema_obj)
+    schema_compact = json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
     schema_keys = list(schema.keys())
+    aliases_compact = json.dumps(_build_aliases_for_schema(schema), ensure_ascii=False, separators=(",", ":"))
     schema_keys_compact = json.dumps(schema_keys, ensure_ascii=False, separators=(",", ":"))
-
-    # Token-minimal: provide a full compilable template with deterministic mapping.
-    # The model only needs to return code (we still call it, but the logic is already explicit).
-    out_lines = []
-    for k in schema_keys:
-        key_json = json.dumps(k, ensure_ascii=False)
-        out_lines.append(f"      out[{key_json}]=get(row,{key_json});")
-    out_body = "\n".join(out_lines)
 
     return (
         "Return ONLY TypeScript code. No markdown. No comments. No explanation.\n"
-        "Keep output short and deterministic.\n"
-        "Rules:\n"
-        "1) Use the provided interface and export default function signature exactly.\n"
-        "   - base64file is NOT JSON input; keep `void base64file;`.\n"
-        "   - NEVER use JSON.parse(base64file).\n"
-        "2) Build rows ONLY from schema keys (ignore unknown columns).\n"
-        "3) If an input row has a single key that contains ';', treat it as a broken CSV row:\n"
-        "   - split that key by ';' to get header columns;\n"
-        "   - split the single value by ';' to get values;\n"
-        "   - map by index header[i] -> value[i].\n"
-        "4) Do not inline huge constants; use compact logic.\n"
+        "Generate fully working deterministic code.\n"
+        "Hard requirements:\n"
+        "1) Keep the provided interface and function signature exactly.\n"
+        "2) base64file is CSV in base64 (not JSON). Decode and parse it at runtime.\n"
+        "3) CSV separator is ';', support quoted values and newlines inside quotes.\n"
+        "4) Build a header map from CSV columns to schema keys by normalized names.\n"
+        "5) Convert values by schema example type:\n"
+        "   - number: parse decimal, comma as decimal separator supported\n"
+        "   - boolean: true for [1,true,yes,y,да], false otherwise\n"
+        "   - string: string value\n"
+        "   - null in schema means string | null (empty -> null)\n"
+        "6) Do not use `as any` for result or return value.\n"
+        "7) Ignore unknown CSV columns.\n"
+        "8) Return DealData[] built from real CSV rows.\n"
+        "Schema object:\n"
+        f"{schema_compact}\n"
         "Schema keys:\n"
         f"{schema_keys_compact}\n"
-        "Extracted input JSON:\n"
-        f"{extracted_compact}\n"
+        "Header aliases map (schemaKey -> candidate CSV headers):\n"
+        f"{aliases_compact}\n"
         f"{interface_ts}\n"
         "export default function (base64file: string): DealData[] {\n"
-        "  void base64file;\n"
-        f"  const extracted = {extracted_compact} as any;\n"
-        "  const result: DealData[] = [];\n"
-        "  const norm=(s:any)=>String(s??'').toLowerCase().replace(/[^a-z0-9]/g,'');\n"
-        "  const get=(row:any, key:string)=>{\n"
-        "    const keys=Object.keys(row||{});\n"
-        "    const k=keys.find(x=>norm(x)===norm(key));\n"
-        "    return k ? row[k] : '';\n"
-        "  };\n"
-        "  if(Array.isArray(extracted)){\n"
-        "    for(const row of extracted){\n"
-        "      if(!row||typeof row!=='object') continue;\n"
-        "      const out:any={};\n"
-        f"{out_body}\n"
-        "      result.push(out as DealData);\n"
+        "  const schema = SCHEMA_PLACEHOLDER;\n"
+        "  const decodeBase64 = (input: string): string => {\n"
+        "    if (!input) return \"\";\n"
+        "    if (typeof Buffer !== \"undefined\") return Buffer.from(input, \"base64\").toString(\"utf-8\");\n"
+        "    if (typeof atob !== \"undefined\") {\n"
+        "      const binary = atob(input);\n"
+        "      const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));\n"
+        "      return new TextDecoder(\"utf-8\").decode(bytes);\n"
         "    }\n"
+        "    return \"\";\n"
+        "  };\n"
+        "  const parseCsv = (text: string): string[][] => {\n"
+        "    const rows: string[][] = [];\n"
+        "    let row: string[] = [];\n"
+        "    let cell = \"\";\n"
+        "    let inQuotes = false;\n"
+        "    for (let i = 0; i < text.length; i++) {\n"
+        "      const ch = text[i];\n"
+        "      if (ch === '\"') {\n"
+        "        if (inQuotes && text[i + 1] === '\"') { cell += '\"'; i++; }\n"
+        "        else { inQuotes = !inQuotes; }\n"
+        "      } else if (ch === ';' && !inQuotes) {\n"
+        "        row.push(cell); cell = \"\";\n"
+        "      } else if ((ch === '\\n' || ch === '\\r') && !inQuotes) {\n"
+        "        if (ch === '\\r' && text[i + 1] === '\\n') i++;\n"
+        "        row.push(cell); cell = \"\";\n"
+        "        if (row.some((x) => x !== \"\")) rows.push(row);\n"
+        "        row = [];\n"
+        "      } else {\n"
+        "        cell += ch;\n"
+        "      }\n"
+        "    }\n"
+        "    row.push(cell);\n"
+        "    if (row.some((x) => x !== \"\")) rows.push(row);\n"
+        "    return rows;\n"
+        "  };\n"
+        "  const norm = (s: string): string => s.toLowerCase().replace(/[^\\p{L}\\p{N}]+/gu, \"\");\n"
+        "  const toNumber = (s: string): number => {\n"
+        "    const n = Number(String(s || \"\").trim().replace(/\\s+/g, \"\").replace(\",\", \".\"));\n"
+        "    return Number.isFinite(n) ? n : 0;\n"
+        "  };\n"
+        "  const toBoolean = (s: string): boolean => [\"1\",\"true\",\"yes\",\"y\",\"да\"].includes(String(s || \"\").trim().toLowerCase());\n"
+        "  const cast = (value: string, example: unknown): unknown => {\n"
+        "    if (typeof example === \"number\") return toNumber(value);\n"
+        "    if (typeof example === \"boolean\") return toBoolean(value);\n"
+        "    if (example === null) { const t = String(value || \"\").trim(); return t === \"\" ? null : t; }\n"
+        "    return String(value ?? \"\");\n"
+        "  };\n"
+        "  const csv = decodeBase64(base64file);\n"
+        "  const rows = parseCsv(csv);\n"
+        "  if (!rows.length) return [];\n"
+        "  const aliases: Record<string, string[]> = ALIASES_PLACEHOLDER;\n"
+        "  const headers = rows[0].map((h) => String(h ?? \"\").trim());\n"
+        "  const headerIndex = new Map<string, number>();\n"
+        "  headers.forEach((h, i) => headerIndex.set(norm(h), i));\n"
+        "  const keys = Object.keys(schema);\n"
+        "  const out: DealData[] = [];\n"
+        "  for (let r = 1; r < rows.length; r++) {\n"
+        "    const line = rows[r];\n"
+        "    const obj: Record<string, unknown> = {};\n"
+        "    for (const key of keys) {\n"
+        "      const candidates = [key, ...(aliases[key] ?? [])];\n"
+        "      let idx: number | undefined = undefined;\n"
+        "      for (const name of candidates) {\n"
+        "        const found = headerIndex.get(norm(name));\n"
+        "        if (found !== undefined) { idx = found; break; }\n"
+        "      }\n"
+        "      const raw = idx === undefined ? \"\" : String(line[idx] ?? \"\");\n"
+        "      obj[key] = cast(raw, (schema as Record<string, unknown>)[key]);\n"
+        "    }\n"
+        "    out.push(obj as DealData);\n"
         "  }\n"
-        "  return result;\n"
+        "  return out;\n"
         "}\n"
-    )
+    ).replace("SCHEMA_PLACEHOLDER", schema_compact).replace("ALIASES_PLACEHOLDER", aliases_compact)
 

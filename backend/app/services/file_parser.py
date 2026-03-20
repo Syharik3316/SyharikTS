@@ -94,6 +94,37 @@ def _read_csv_dataframe(contents: bytes, *, max_rows: int) -> pd.DataFrame:
     )
 
 
+def _normalize_broken_semicolon_rows(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    If parser produced one-column rows like {"a;b;c":"1;2;3"}, expand them.
+    """
+    if not records:
+        return records
+
+    normalized: List[Dict[str, Any]] = []
+    for row in records:
+        if not isinstance(row, dict) or len(row) != 1:
+            normalized.append(row)
+            continue
+
+        only_key = next(iter(row.keys()), "")
+        only_val = str(next(iter(row.values()), ""))
+        if ";" not in str(only_key):
+            normalized.append(row)
+            continue
+
+        headers = [h.strip() for h in str(only_key).split(";")]
+        values = [v.strip() for v in only_val.split(";")]
+        expanded: Dict[str, Any] = {}
+        for i, h in enumerate(headers):
+            if not h:
+                continue
+            expanded[h] = values[i] if i < len(values) else ""
+        normalized.append(expanded if expanded else row)
+
+    return normalized
+
+
 async def extract_extracted_input(
     file: UploadFile,
     *,
@@ -123,6 +154,7 @@ async def extract_extracted_input(
             raise ValueError("Unsupported spreadsheet kind")
 
         records = _to_records_dataframe(df, max_rows=max_rows)
+        records = _normalize_broken_semicolon_rows(records)
         return file_kind, records
 
     if file_kind == "pdf":
