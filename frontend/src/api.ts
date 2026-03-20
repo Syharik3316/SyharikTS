@@ -11,18 +11,9 @@ export async function generateTsCode(file: File, schemaText: string): Promise<st
   form.append("file", file);
   form.append("schema", schemaText);
 
-  const token = (() => {
-    try {
-      return localStorage.getItem("accessToken");
-    } catch {
-      return null;
-    }
-  })();
-
   const res = await fetch(`${API_BASE_URL}/generate`, {
     method: "POST",
     body: form,
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
   });
 
   if (!res.ok) {
@@ -46,18 +37,9 @@ export async function inferSchemaExample(file: File): Promise<string> {
   const form = new FormData();
   form.append("file", file);
 
-  const token = (() => {
-    try {
-      return localStorage.getItem("accessToken");
-    } catch {
-      return null;
-    }
-  })();
-
   const res = await fetch(`${API_BASE_URL}/infer-schema`, {
     method: "POST",
     body: form,
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
   });
 
   if (!res.ok) {

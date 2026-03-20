@@ -18,32 +18,7 @@ services:
       - GIGACHAT_TIMEOUT_SECONDS=${GIGACHAT_TIMEOUT_SECONDS:-90}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-*}
-      # Auth (no DB in MVP)
-      - JWT_SECRET=${JWT_SECRET:-change-me-to-a-long-random-string}
-      - JWT_ACCESS_EXPIRES_MINUTES=${JWT_ACCESS_EXPIRES_MINUTES:-60}
-      - RECAPTCHA_V2_SITE_KEY=${RECAPTCHA_V2_SITE_KEY:-}
-      - RECAPTCHA_V2_SECRET_KEY=${RECAPTCHA_V2_SECRET_KEY:-}
-      - SMTP_HOST=${SMTP_HOST:-}
-      - SMTP_PORT=${SMTP_PORT:-587}
-      - SMTP_USER=${SMTP_USER:-}
-      - SMTP_PASS=${SMTP_PASS:-}
-      - SMTP_FROM=${SMTP_FROM:-}
-      - AUTH_CODE_TTL_SECONDS=${AUTH_CODE_TTL_SECONDS:-600}
     volumes:
       - ./backend:/app
-
-  frontend:
-    build:
-      context: ./frontend
-    ports:
-      - "5173:5173"
-    environment:
-      - VITE_API_BASE_URL=${VITE_API_BASE_URL:-http://localhost:8000}
-      - VITE_RECAPTCHA_SITE_KEY=${RECAPTCHA_V2_SITE_KEY:-}
-    depends_on:
-      - backend
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
 
 volumes: {}

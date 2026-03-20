@@ -1,11 +1,10 @@
 import json
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from app.models.schemas import GenerateResponse
 from app.services.file_parser import extract_extracted_input
 from app.services.prompt_builder import build_generation_prompt, build_interface_ts
 from app.services.llm_client import LLMClient
-from app.routers.auth import get_current_user
 
 router = APIRouter()
 
@@ -14,7 +13,6 @@ router = APIRouter()
 async def generate(
     file: UploadFile = File(..., description="Uploaded file (CSV/XLS/PDF/DOCX/PNG/JPG)"),
     schema: str = Form(..., description="JSON-string schema example for output objects"),
-    _current_user=Depends(get_current_user),
 ):
     if not file:
         raise HTTPException(status_code=400, detail="file is required")

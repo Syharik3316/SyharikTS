@@ -1,11 +1,10 @@
 import json
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from app.models.schemas import InferSchemaResponse
 from app.services.file_parser import extract_extracted_input
 from app.services.schema_inferer import infer_schema_from_extracted
-from app.routers.auth import get_current_user
 
 router = APIRouter()
 
@@ -13,7 +12,6 @@ router = APIRouter()
 @router.post("/infer-schema", response_model=InferSchemaResponse)
 async def infer_schema(
     file: UploadFile = File(...),
-    _current_user=Depends(get_current_user),
 ) -> InferSchemaResponse:
     if not file:
         raise HTTPException(status_code=400, detail="file is required")

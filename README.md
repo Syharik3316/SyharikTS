@@ -34,9 +34,6 @@ docker compose up --build
 { "code": "export default function ... " }
 ```
 
-Требование:
-- Вызовы защищены JWT. Отправляйте заголовок `Authorization: Bearer <accessToken>`.
-
 Пример:
 
 ```bash
@@ -49,40 +46,6 @@ curl -X POST "http://localhost:8000/generate" ^
 
 - `file`: загружаемый файл
 - Ответ: `{ "schema": "{\"field\":\"example\"}" }`
-
-Требование:
-- Также защищено JWT: `Authorization: Bearer <accessToken>`.
-
-## Авторизация (JWT + email-код)
-
-Роуты (все требуют `ReCaptcha v2` токен для операций, где это указано ниже):
-
-1. Регистрация:
-   - `POST /auth/register` (`email`, `login`, `password`, `recaptchaToken`)
-   - Сервер отправляет код подтверждения на email
-2. Подтверждение email:
-   - `POST /auth/verify-email` (`email`, `code`)
-3. Вход:
-   - `POST /auth/login` (`identifier` = email или login, `password`, `recaptchaToken`)
-   - Ответ: `{ "accessToken": "...", "user": { "id", "email", "login", "emailVerified" } }`
-4. Восстановление пароля:
-   - `POST /auth/request-password-reset` (`identifier`, `recaptchaToken`)
-   - `POST /auth/reset-password` (`identifier`, `code`, `newPassword`)
-
-Дополнительно:
-- `GET /auth/me` — получить данные текущего пользователя (требует `Authorization: Bearer <accessToken>`).
-
-## Auth/Email/Captcha (ReCaptcha v2 + MySQL + SMTP)
-
-Backend:
-- `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` (MySQL; при отсутствии будет использован `sqlite auth.db`)
-- `JWT_SECRET`, `JWT_ACCESS_EXPIRES_MINUTES`
-- `RECAPTCHA_V2_SECRET_KEY`
-- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`
-- `AUTH_CODE_TTL_SECONDS`
-
-Frontend:
-- `VITE_RECAPTCHA_SITE_KEY` (должен соответствовать `RECAPTCHA_V2_SITE_KEY` на backend)
 
 ## Настройка модели (LLM_PROVIDER)
 

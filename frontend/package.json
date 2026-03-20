@@ -12,7 +12,6 @@
     "highlight.js": "*",
     "react": "*",
     "react-dom": "*",
-    "react-google-recaptcha": "^3.1.0",
     "typescript": "*"
   },
   "devDependencies": {

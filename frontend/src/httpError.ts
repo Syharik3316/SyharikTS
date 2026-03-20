@@ -39,10 +39,8 @@ export async function parseBackendError(res: Response): Promise<{ status: number
 }
 
 export function mapStatusToUserMessage(status: number, detail?: string): string {
-  if (status === 401) return "Нужно войти в аккаунт (или сессия истекла).";
+  if (status === 401) return "Не удалось выполнить запрос.";
   if (status === 403) {
-    const d = (detail || "").toLowerCase();
-    if (d.includes("email is not verified")) return "Сначала подтвердите email (код из письма).";
     return detail ? `Доступ запрещен: ${detail}` : "Доступ запрещен.";
   }
   if (status === 404) return "Запрошенный ресурс не найден.";
@@ -53,12 +51,6 @@ export function mapStatusToUserMessage(status: number, detail?: string): string 
   }
   if (status === 400 || status === 422) {
     const d = (detail || "").toLowerCase();
-    if (d.includes("invalid credentials")) return "Неверный логин/почта или пароль.";
-    if (d.includes("email is already registered")) return "Этот email уже зарегистрирован.";
-    if (d.includes("login is already taken")) return "Этот логин уже занят.";
-    if (d.includes("invalid or expired code")) return "Код неверный или истёк. Запросите новый код.";
-    if (d.includes("invalid code")) return "Код неверный или истёк. Запросите новый код.";
-    if (d.includes("recaptcha validation failed")) return "Подтвердите, что вы не робот (ReCaptcha).";
     if (d.includes("unsupported file type")) return "Файл данного типа не поддерживается.";
     if (d.includes("schema is required")) return "Нужно указать JSON-строку схемы.";
     if (detail) return `Ошибка входных данных: ${detail}`;

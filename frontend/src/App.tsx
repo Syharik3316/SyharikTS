@@ -3,11 +3,6 @@ import { generateTsCode, inferSchemaExample } from "./api";
 import FileUpload from "./components/FileUpload";
 import CodeDisplay from "./components/CodeDisplay";
 import CheckPage from "./pages/CheckPage";
-import AuthControls from "./components/AuthControls";
-import LoginModal from "./auth/modals/LoginModal";
-import RegisterModal from "./auth/modals/RegisterModal";
-import ForgotPasswordModal from "./auth/modals/ForgotPasswordModal";
-import ResetPasswordModal from "./auth/modals/ResetPasswordModal";
 import { ApiError } from "./httpError";
 
 export default function App() {
@@ -31,15 +26,6 @@ export default function App() {
   const [inferError, setInferError] = React.useState<string>("");
   const [page, setPage] = React.useState<"generator" | "check">("generator");
 
-  const [authModal, setAuthModal] = React.useState<null | "login" | "register" | "forgot" | "reset">(null);
-  const [resetIdentifier, setResetIdentifier] = React.useState<string>("");
-
-  function openAuth(tab: "login" | "register" | "forgot") {
-    if (tab === "forgot") setAuthModal("forgot");
-    if (tab === "login") setAuthModal("login");
-    if (tab === "register") setAuthModal("register");
-  }
-
   async function onGenerate() {
     setError("");
     setLoading(true);
@@ -49,10 +35,6 @@ export default function App() {
       setCode(await generateTsCode(file, schemaText));
     } catch (e) {
       if (e instanceof ApiError) {
-        if (e.status === 401) {
-          setAuthModal("login");
-          return;
-        }
         setError(e.userMessage);
         return;
       }
@@ -79,10 +61,6 @@ export default function App() {
       setSchemaText(obj ? JSON.stringify(obj, null, 2) : schemaStr);
     } catch (e) {
       if (e instanceof ApiError) {
-        if (e.status === 401) {
-          setAuthModal("login");
-          return;
-        }
         setInferError(e.userMessage);
         return;
       }
@@ -107,12 +85,6 @@ export default function App() {
               {page === "check" ? "Вставьте TS-код и проверьте результат." : "Сначала сгенерируйте код."}
             </div>
           </div>
-
-          <AuthControls
-            onOpenAuth={(tab) => {
-              openAuth(tab);
-            }}
-          />
         </div>
       </div>
 
@@ -162,34 +134,6 @@ export default function App() {
       ) : (
         <CheckPage initialCode={code} />
       )}
-
-      <LoginModal
-        open={authModal === "login"}
-        onClose={() => setAuthModal(null)}
-        onSwitchToForgot={() => setAuthModal("forgot")}
-        onLoginSuccess={() => {
-          // If user opened login because of unauthorized API call, we just close.
-        }}
-      />
-      <RegisterModal
-        open={authModal === "register"}
-        onClose={() => setAuthModal(null)}
-        onSwitchToLogin={() => setAuthModal("login")}
-      />
-      <ForgotPasswordModal
-        open={authModal === "forgot"}
-        onClose={() => setAuthModal(null)}
-        onResetCodeSent={(identifier) => {
-          setResetIdentifier(identifier);
-          setAuthModal("reset");
-        }}
-      />
-      <ResetPasswordModal
-        open={authModal === "reset"}
-        onClose={() => setAuthModal("login")}
-        identifier={resetIdentifier}
-        onResetSuccess={() => undefined}
-      />
     </>
   );
 }

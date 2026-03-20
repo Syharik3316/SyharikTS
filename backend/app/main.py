@@ -3,7 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers.generate import router as generate_router
 from app.routers.infer_schema import router as infer_schema_router
-from app.routers.auth import router as auth_router
 
 
 def create_app() -> FastAPI:
@@ -33,7 +32,6 @@ def create_app() -> FastAPI:
 
     app.include_router(generate_router)
     app.include_router(infer_schema_router)
-    app.include_router(auth_router)
     return app
 
 
