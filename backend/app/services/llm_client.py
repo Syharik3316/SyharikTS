@@ -146,6 +146,8 @@ class LLMClient:
 
         if " as any" in low:
             return True
+        if "\\p{l}" in low or "\\p{n}" in low:
+            return True
 
         if "const result: dealdata[] =" in low and "return result;" in low and "parsecsv" not in low:
             return True
@@ -153,7 +155,8 @@ class LLMClient:
         # Require at least basic runtime csv flow.
         has_decode = "decodebase64" in low or "buffer.from(base64file" in low or "atob(" in low
         has_parse = "parsecsv" in low or "split(';')" in low or "separator" in low
-        if not (has_decode and has_parse):
+        has_typed_return = "dealdata[]" in code
+        if not (has_decode and has_parse and has_typed_return):
             return True
 
         return False
@@ -169,13 +172,25 @@ class LLMClient:
             f"  const aliases: Record<string, string[]> = {aliases_compact};\n"
             "  const decodeBase64 = (input: string): string => {\n"
             "    if (!input) return \"\";\n"
-            "    if (typeof Buffer !== \"undefined\") return Buffer.from(input, \"base64\").toString(\"utf-8\");\n"
-            "    if (typeof atob !== \"undefined\") {\n"
-            "      const binary = atob(input);\n"
-            "      const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));\n"
-            "      return new TextDecoder(\"utf-8\").decode(bytes);\n"
+            "    const raw = String(input).trim();\n"
+            "    const payload = raw.includes(\"base64,\") ? raw.slice(raw.indexOf(\"base64,\") + 7) : raw;\n"
+            "    let cleaned = payload.replace(/\\s+/g, \"\").replace(/-/g, \"+\").replace(/_/g, \"/\").replace(/[^A-Za-z0-9+/=]/g, \"\");\n"
+            "    const pad = cleaned.length % 4;\n"
+            "    if (pad > 0) cleaned += \"=\".repeat(4 - pad);\n"
+            "    let text = \"\";\n"
+            "    try {\n"
+            "      if (typeof Buffer !== \"undefined\") {\n"
+            "        text = Buffer.from(cleaned, \"base64\").toString(\"utf-8\");\n"
+            "      } else if (typeof atob !== \"undefined\") {\n"
+            "        const binary = atob(cleaned);\n"
+            "        const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));\n"
+            "        text = new TextDecoder(\"utf-8\", { fatal: false }).decode(bytes);\n"
+            "      }\n"
+            "    } catch {\n"
+            "      return \"\";\n"
             "    }\n"
-            "    return \"\";\n"
+            "    if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);\n"
+            "    return text;\n"
             "  };\n"
             "  const parseCsv = (text: string): string[][] => {\n"
             "    const rows: string[][] = [];\n"
@@ -201,7 +216,7 @@ class LLMClient:
             "    if (row.some((x) => x !== \"\")) rows.push(row);\n"
             "    return rows;\n"
             "  };\n"
-            "  const norm = (s: string): string => s.toLowerCase().replace(/[^\\p{L}\\p{N}]+/gu, \"\");\n"
+            "  const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9а-яё]+/gi, \"\");\n"
             "  const toNumber = (s: string): number => {\n"
             "    const n = Number(String(s || \"\").trim().replace(/\\s+/g, \"\").replace(\",\", \".\"));\n"
             "    return Number.isFinite(n) ? n : 0;\n"
@@ -235,7 +250,14 @@ class LLMClient:
             "        if (found !== undefined) { idx = found; break; }\n"
             "      }\n"
             "      const raw = idx === undefined ? \"\" : String(line[idx] ?? \"\");\n"
-            "      obj[key] = cast(raw, schema[key]);\n"
+            "      if (key === \"dealStageFinal\") {\n"
+            "        const stageIdx = idxByHeader.get(norm(\"Стадия (Сделка)\"));\n"
+            "        const stageRaw = stageIdx === undefined ? \"\" : String(line[stageIdx] ?? \"\");\n"
+            "        const st = stageRaw.trim().toLowerCase();\n"
+            "        obj[key] = st === \"закрыта\" || st === \"отклонена\";\n"
+            "      } else {\n"
+            "        obj[key] = cast(raw, schema[key]);\n"
+            "      }\n"
             "    }\n"
             "    result.push(obj as DealData);\n"
             "  }\n"

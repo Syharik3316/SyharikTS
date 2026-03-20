@@ -57,12 +57,27 @@ async def generate(
 
     try:
         client = LLMClient()
-        code = client.generate_ts_code(
-            prompt=prompt,
-            extracted_input_json=extracted_input_json,
-            schema_obj=schema_obj,
-            interface_ts=interface_ts,
-        )
+        # Hybrid path: for tabular inputs rely on deterministic generator (stub),
+        # for other file kinds keep configured LLM provider.
+        if file_kind in {"csv", "xls", "xlsx"}:
+            prev_provider = client.provider
+            client.provider = "stub"
+            try:
+                code = client.generate_ts_code(
+                    prompt=prompt,
+                    extracted_input_json=extracted_input_json,
+                    schema_obj=schema_obj,
+                    interface_ts=interface_ts,
+                )
+            finally:
+                client.provider = prev_provider
+        else:
+            code = client.generate_ts_code(
+                prompt=prompt,
+                extracted_input_json=extracted_input_json,
+                schema_obj=schema_obj,
+                interface_ts=interface_ts,
+            )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"LLM generation failed: {e}")
 
