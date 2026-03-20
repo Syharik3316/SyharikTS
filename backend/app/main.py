@@ -1,7 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.db import init_db
 from app.routers.generate import router as generate_router
 from app.routers.infer_schema import router as infer_schema_router
 from app.routers.auth import router as auth_router
@@ -31,13 +30,6 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-
-    @app.on_event("startup")
-    def _startup() -> None:
-        # Ensure SQLAlchemy models are imported before create_all().
-        import app.models.auth_db  # noqa: F401
-
-        init_db()
 
     app.include_router(generate_router)
     app.include_router(infer_schema_router)

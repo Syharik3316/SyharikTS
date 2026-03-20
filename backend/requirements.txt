@@ -9,8 +9,6 @@ email-validator
 python-multipart
 
 # Auth + DB
-sqlalchemy
-pymysql
 passlib[bcrypt]
 python-jose[cryptography]
 

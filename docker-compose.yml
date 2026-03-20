@@ -4,8 +4,6 @@ services:
       context: ./backend
     ports:
       - "8000:8000"
-    depends_on:
-      - mysql
     environment:
       - LLM_PROVIDER=${LLM_PROVIDER:-stub}
       - OPENAI_COMPAT_BASE_URL=${OPENAI_COMPAT_BASE_URL:-}
@@ -20,12 +18,7 @@ services:
       - GIGACHAT_TIMEOUT_SECONDS=${GIGACHAT_TIMEOUT_SECONDS:-90}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-*}
-      # Auth / DB
-      - DB_HOST=mysql
-      - DB_PORT=${DB_PORT:-3306}
-      - DB_NAME=${DB_NAME:-converter_agent}
-      - DB_USER=${DB_USER:-converter_agent}
-      - DB_PASSWORD=${DB_PASSWORD:-change-me}
+      # Auth (no DB in MVP)
       - JWT_SECRET=${JWT_SECRET:-change-me-to-a-long-random-string}
       - JWT_ACCESS_EXPIRES_MINUTES=${JWT_ACCESS_EXPIRES_MINUTES:-60}
       - RECAPTCHA_V2_SITE_KEY=${RECAPTCHA_V2_SITE_KEY:-}
@@ -38,21 +31,6 @@ services:
       - AUTH_CODE_TTL_SECONDS=${AUTH_CODE_TTL_SECONDS:-600}
     volumes:
       - ./backend:/app
-
-  mysql:
-    image: mysql:8
-    restart: unless-stopped
-    environment:
-      - MYSQL_DATABASE=${DB_NAME:-converter_agent}
-      - MYSQL_USER=${DB_USER:-converter_agent}
-      - MYSQL_PASSWORD=${DB_PASSWORD:-change-me}
-      - MYSQL_ROOT_PASSWORD=${DB_PASSWORD:-change-me}
-    volumes:
-      - mysql_data:/var/lib/mysql
-    # MySQL 8.4 removed default_authentication_plugin (and the old
-    # --default-authentication-plugin=... flag). Enable mysql_native_password
-    # for compatibility with the PyMySQL client used by the backend.
-    command: ["--mysql-native-password=ON"]
 
   frontend:
     build:
@@ -68,5 +46,4 @@ services:
       - ./frontend:/app
       - /app/node_modules
 
-volumes:
-  mysql_data:
+volumes: {}

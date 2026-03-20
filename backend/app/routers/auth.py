@@ -1,9 +1,8 @@
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from sqlalchemy.orm import Session
 
-from app.db import get_db
+from app.auth_store import AuthStore, get_auth_store
 from app.models.auth_db import User
 from app.models.auth_schemas import (
     AuthTokenResponse,
@@ -35,7 +34,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 def get_current_user(
     *,
     authorization: Optional[str] = Header(default=None),
-    db: Session = Depends(get_db),
+    store: AuthStore = Depends(get_auth_store),
 ) -> User:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
@@ -55,7 +54,7 @@ def get_current_user(
     except Exception:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
 
-    user = db.get(User, user_id)
+    user = store.get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     return user
@@ -65,7 +64,7 @@ def get_current_user(
 def register(
     req: RegisterRequest,
     request: Request,
-    db: Session = Depends(get_db),
+    store: AuthStore = Depends(get_auth_store),
 ):
     try:
         remote_ip = (request.client.host if request.client else None)  # best effort
@@ -76,7 +75,7 @@ def register(
         raise HTTPException(status_code=400, detail="ReCaptcha validation failed")
 
     try:
-        register_and_send_email_code(db, email=req.email, login=req.login, password=req.password)
+        register_and_send_email_code(store, email=req.email, login=req.login, password=req.password)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -84,9 +83,9 @@ def register(
 
 
 @router.post("/verify-email", response_model=MessageResponse)
-def verify_email(req: VerifyEmailRequest, db: Session = Depends(get_db)):
+def verify_email(req: VerifyEmailRequest, store: AuthStore = Depends(get_auth_store)):
     try:
-        verify_email_code(db, email=req.email, code=req.code)
+        verify_email_code(store, email=req.email, code=req.code)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"message": "Email verified successfully"}
@@ -96,7 +95,7 @@ def verify_email(req: VerifyEmailRequest, db: Session = Depends(get_db)):
 def login(
     req: LoginRequest,
     request: Request,
-    db: Session = Depends(get_db),
+    store: AuthStore = Depends(get_auth_store),
 ):
     try:
         remote_ip = (request.client.host if request.client else None)
@@ -107,7 +106,7 @@ def login(
         raise HTTPException(status_code=400, detail="ReCaptcha validation failed")
 
     try:
-        token, user = login_user(db, identifier=req.identifier, password=req.password)
+        token, user = login_user(store, identifier=req.identifier, password=req.password)
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
     except ValueError as e:
@@ -122,7 +121,7 @@ def login(
 def request_password_reset(
     req: PasswordResetRequest,
     request: Request,
-    db: Session = Depends(get_db),
+    store: AuthStore = Depends(get_auth_store),
 ):
     try:
         remote_ip = (request.client.host if request.client else None)
@@ -134,7 +133,7 @@ def request_password_reset(
 
     # Avoid leaking if user exists.
     try:
-        send_password_reset_email(db, identifier=req.identifier)
+        send_password_reset_email(store, identifier=req.identifier)
     except ValueError:
         pass
 
@@ -142,9 +141,9 @@ def request_password_reset(
 
 
 @router.post("/reset-password", response_model=MessageResponse)
-def reset_password_endpoint(req: ResetPasswordRequest, db: Session = Depends(get_db)):
+def reset_password_endpoint(req: ResetPasswordRequest, store: AuthStore = Depends(get_auth_store)):
     try:
-        reset_password(db, identifier=req.identifier, code=req.code, new_password=req.newPassword)
+        reset_password(store, identifier=req.identifier, code=req.code, new_password=req.newPassword)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"message": "Password has been reset"}
