@@ -1,6 +1,7 @@
 import React from "react";
 import ReCAPTCHA from "react-google-recaptcha";
 import { useAuth } from "../AuthContext";
+import { ApiError } from "../../httpError";
 
 const RECAPTCHA_SITE_KEY = import.meta.env.VITE_RECAPTCHA_SITE_KEY ?? "";
 
@@ -51,7 +52,7 @@ export default function RegisterModal(props: {
       await register({ email, login, password, recaptchaToken });
       setStep("verify");
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(e instanceof ApiError ? e.userMessage : e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
@@ -69,7 +70,7 @@ export default function RegisterModal(props: {
       onClose();
       onSwitchToLogin();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(e instanceof ApiError ? e.userMessage : e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }

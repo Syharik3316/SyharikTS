@@ -1,5 +1,6 @@
 import React from "react";
 import { useAuth } from "../AuthContext";
+import { ApiError } from "../../httpError";
 
 export default function ResetPasswordModal(props: {
   open: boolean;
@@ -37,7 +38,7 @@ export default function ResetPasswordModal(props: {
       onResetSuccess();
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(e instanceof ApiError ? e.userMessage : e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }

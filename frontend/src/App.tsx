@@ -8,6 +8,7 @@ import LoginModal from "./auth/modals/LoginModal";
 import RegisterModal from "./auth/modals/RegisterModal";
 import ForgotPasswordModal from "./auth/modals/ForgotPasswordModal";
 import ResetPasswordModal from "./auth/modals/ResetPasswordModal";
+import { ApiError } from "./httpError";
 
 export default function App() {
   const [file, setFile] = React.useState<File | null>(null);
@@ -47,12 +48,15 @@ export default function App() {
       if (!file) throw new Error("Choose a file first.");
       setCode(await generateTsCode(file, schemaText));
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (msg === "UNAUTHORIZED") {
-        setAuthModal("login");
+      if (e instanceof ApiError) {
+        if (e.status === 401) {
+          setAuthModal("login");
+          return;
+        }
+        setError(e.userMessage);
         return;
       }
-      setError(msg);
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
@@ -74,12 +78,15 @@ export default function App() {
       })();
       setSchemaText(obj ? JSON.stringify(obj, null, 2) : schemaStr);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (msg === "UNAUTHORIZED") {
-        setAuthModal("login");
+      if (e instanceof ApiError) {
+        if (e.status === 401) {
+          setAuthModal("login");
+          return;
+        }
+        setInferError(e.userMessage);
         return;
       }
-      setInferError(msg);
+      setInferError(e instanceof Error ? e.message : String(e));
     } finally {
       setInferLoading(false);
     }

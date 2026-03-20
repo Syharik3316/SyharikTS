@@ -13,7 +13,8 @@ pymysql
 passlib[bcrypt]
 python-jose[cryptography]
 
-pandas
+pandas==2.2.3
+numpy==1.26.4
 openpyxl
 xlrd
 

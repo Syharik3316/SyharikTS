@@ -1,3 +1,5 @@
+import { ApiError, mapStatusToUserMessage, parseBackendError } from "../httpError";
+
 export type UserPublic = {
   id: number;
   email: string;
@@ -19,8 +21,12 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000
 async function requestJson<T>(path: string, init: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE_URL}${path}`, init);
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(text || `${res.status} ${res.statusText}`);
+    const { status, detail } = await parseBackendError(res);
+    throw new ApiError({
+      status,
+      detail,
+      userMessage: mapStatusToUserMessage(status, detail),
+    });
   }
   return (await res.json()) as T;
 }

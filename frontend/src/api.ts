@@ -1,3 +1,5 @@
+import { ApiError, mapStatusToUserMessage, parseBackendError } from "./httpError";
+
 export type GenerateResponse = {
   code: string;
 };
@@ -24,9 +26,12 @@ export async function generateTsCode(file: File, schemaText: string): Promise<st
   });
 
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    if (res.status === 401) throw new Error("UNAUTHORIZED");
-    throw new Error(`Backend error ${res.status}: ${text || res.statusText}`);
+    const { status, detail } = await parseBackendError(res);
+    throw new ApiError({
+      status,
+      detail,
+      userMessage: mapStatusToUserMessage(status, detail),
+    });
   }
 
   const data = (await res.json()) as GenerateResponse;
@@ -56,9 +61,12 @@ export async function inferSchemaExample(file: File): Promise<string> {
   });
 
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    if (res.status === 401) throw new Error("UNAUTHORIZED");
-    throw new Error(`Backend error ${res.status}: ${text || res.statusText}`);
+    const { status, detail } = await parseBackendError(res);
+    throw new ApiError({
+      status,
+      detail,
+      userMessage: mapStatusToUserMessage(status, detail),
+    });
   }
 
   const data = (await res.json()) as InferSchemaResponse;
