@@ -5,6 +5,7 @@ langchain-community
 langchain-core
 langchain-openai
 pydantic
+email-validator
 python-multipart
 
 # Auth + DB
