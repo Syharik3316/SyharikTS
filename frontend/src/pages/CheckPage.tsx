@@ -3,6 +3,7 @@ import ts from "typescript";
 
 type CheckPageProps = {
   initialCode?: string;
+  inputFile?: File | null;
 };
 
 function stripInterfaceBlocks(source: string): string {
@@ -12,7 +13,7 @@ function stripInterfaceBlocks(source: string): string {
 }
 
 export default function CheckPage(props: CheckPageProps) {
-  const { initialCode } = props;
+  const { initialCode, inputFile } = props;
 
   const [codeInput, setCodeInput] = React.useState<string>(initialCode ?? "");
 
@@ -24,6 +25,21 @@ export default function CheckPage(props: CheckPageProps) {
   const [resultPreview, setResultPreview] = React.useState<string>("");
   const [error, setError] = React.useState<string>("");
   const [loading, setLoading] = React.useState(false);
+
+  function bytesToBase64(bytes: Uint8Array): string {
+    let binary = "";
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.subarray(i, i + chunkSize);
+      binary += String.fromCharCode(...chunk);
+    }
+    return btoa(binary);
+  }
+
+  async function fileToBase64(file: File): Promise<string> {
+    const buffer = await file.arrayBuffer();
+    return bytesToBase64(new Uint8Array(buffer));
+  }
 
   async function onCheck() {
     setError("");
@@ -67,8 +83,11 @@ export default function CheckPage(props: CheckPageProps) {
         throw new Error("Generated module does not export default function.");
       }
 
-      // base64file in our MVP template is not required, but we pass dummy string anyway.
-      const res = await fn("dummy_base64file");
+      if (!inputFile) {
+        throw new Error("Сначала выберите файл на вкладке Генерация.");
+      }
+      const base64file = await fileToBase64(inputFile);
+      const res = await fn(base64file);
 
       if (!Array.isArray(res)) {
         throw new Error("Function result is not an array.");

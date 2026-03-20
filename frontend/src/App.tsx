@@ -132,7 +132,7 @@ export default function App() {
           </div>
         </div>
       ) : (
-        <CheckPage initialCode={code} />
+        <CheckPage initialCode={code} inputFile={file} />
       )}
     </>
   );
