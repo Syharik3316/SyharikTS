@@ -309,7 +309,8 @@ class LLMClient:
         token, _expires_at = self._get_gigachat_access_token(auth_key=auth_key, verify_tls=verify_tls)
 
         chat_url = f"{base_url}/chat/completions"
-        max_tokens = int((os.getenv("GIGACHAT_MAX_TOKENS") or "1400").strip() or "1400")
+        raw_max_tokens = (os.getenv("GIGACHAT_MAX_TOKENS") or "").strip()
+        max_tokens = int(raw_max_tokens) if raw_max_tokens else None
         timeout_sec = int((os.getenv("GIGACHAT_TIMEOUT_SECONDS") or "90").strip() or "90")
 
         payload = {
@@ -317,11 +318,12 @@ class LLMClient:
             "messages": [{"role": "user", "content": prompt}],
             "stream": False,
             "temperature": 0,
-            "max_tokens": max_tokens,
             "n": 1,
             "repetition_penalty": 1,
             "update_interval": 0,
         }
+        if max_tokens and max_tokens > 0:
+            payload["max_tokens"] = max_tokens
         headers = {
             "Accept": "application/json",
             "Content-Type": "application/json",
@@ -352,8 +354,11 @@ class LLMClient:
             raise RuntimeError("GigaChat returned empty content")
         code = extract_typescript_code(content)
 
-        # Retry once with stricter short instruction if output seems truncated.
-        if looks_like_incomplete_typescript(code):
+        # Retry several times with stronger instruction if output seems truncated.
+        retry_attempts = int((os.getenv("GIGACHAT_RETRY_ATTEMPTS") or "3").strip() or "3")
+        attempt = 0
+        while looks_like_incomplete_typescript(code) and attempt < retry_attempts:
+            attempt += 1
             retry_payload = {
                 "model": model,
                 "messages": [
@@ -367,11 +372,12 @@ class LLMClient:
                 ],
                 "stream": False,
                 "temperature": 0,
-                "max_tokens": max(max_tokens, 2200),
                 "n": 1,
                 "repetition_penalty": 1,
                 "update_interval": 0,
             }
+            if max_tokens and max_tokens > 0:
+                retry_payload["max_tokens"] = max_tokens
             retry_resp = requests.post(
                 chat_url,
                 headers=headers,
@@ -390,6 +396,7 @@ class LLMClient:
                     code_retry = extract_typescript_code(retry_content)
                     if code_retry and not looks_like_incomplete_typescript(code_retry):
                         return code_retry
+                    code = code_retry or code
 
         return code
 

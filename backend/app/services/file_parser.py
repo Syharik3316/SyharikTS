@@ -36,8 +36,10 @@ def _limit_records(records: List[Dict[str, Any]], max_rows: int) -> List[Dict[st
     return records[:max_rows]
 
 
-def _to_records_dataframe(df: pd.DataFrame, max_rows: int) -> List[Dict[str, Any]]:
-    df = df.head(max_rows).fillna("")
+def _to_records_dataframe(df: pd.DataFrame, max_rows: Optional[int]) -> List[Dict[str, Any]]:
+    if max_rows is not None:
+        df = df.head(max_rows)
+    df = df.fillna("")
     records = df.to_dict(orient="records")
     # Ensure all values are strings for compact prompt.
     for r in records:
@@ -67,7 +69,7 @@ def _detect_csv_delimiter(text_sample: str) -> str:
     return ";" if sample.count(";") >= sample.count(",") else ","
 
 
-def _read_csv_dataframe(contents: bytes, *, max_rows: int) -> pd.DataFrame:
+def _read_csv_dataframe(contents: bytes, *, max_rows: Optional[int]) -> pd.DataFrame:
     """
     Read CSV with delimiter/encoding tolerance.
     """
@@ -128,8 +130,8 @@ def _normalize_broken_semicolon_rows(records: List[Dict[str, Any]]) -> List[Dict
 async def extract_extracted_input(
     file: UploadFile,
     *,
-    max_rows: int = 20,
-    max_text_chars: int = 8000,
+    max_rows: Optional[int] = None,
+    max_text_chars: Optional[int] = None,
 ) -> Tuple[str, Any]:
     """
     Returns:
@@ -163,14 +165,15 @@ async def extract_extracted_input(
         bytes_buf = io.BytesIO(contents)
         reader = PdfReader(bytes_buf)
         texts: List[str] = []
-        for page in reader.pages[:8]:  # limit pages for MVP
+        pages = reader.pages if max_rows is None else reader.pages[: max(1, max_rows)]
+        for page in pages:
             try:
                 texts.append(page.extract_text() or "")
             except Exception:
                 # Best-effort extraction
                 texts.append("")
         text = "\n".join(texts).strip()
-        if len(text) > max_text_chars:
+        if max_text_chars is not None and len(text) > max_text_chars:
             text = text[: max_text_chars - 1] + "…"
         return file_kind, {"text": text}
 
@@ -185,7 +188,8 @@ async def extract_extracted_input(
                 paragraphs.append(p.text)
         # Tables: best-effort, but compact.
         tables: List[List[List[str]]] = []
-        for t in doc.tables[:3]:  # limit number of tables for MVP
+        tables_iter = doc.tables if max_rows is None else doc.tables[: max(1, max_rows)]
+        for t in tables_iter:
             table_data: List[List[str]] = []
             for row in t.rows:
                 row_data: List[str] = []
@@ -195,7 +199,7 @@ async def extract_extracted_input(
             tables.append(table_data)
 
         text = "\n".join(paragraphs).strip()
-        if len(text) > max_text_chars:
+        if max_text_chars is not None and len(text) > max_text_chars:
             text = text[: max_text_chars - 1] + "…"
         return file_kind, {"text": text, "tables": tables}
 
@@ -207,7 +211,7 @@ async def extract_extracted_input(
         # OCR may be slow; keep it simple for MVP.
         text = pytesseract.image_to_string(image) or ""
         text = text.strip()
-        if len(text) > max_text_chars:
+        if max_text_chars is not None and len(text) > max_text_chars:
             text = text[: max_text_chars - 1] + "…"
         return file_kind, {"text": text}
 

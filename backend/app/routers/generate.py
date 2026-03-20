@@ -1,4 +1,5 @@
 import json
+import os
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from app.models.schemas import GenerateResponse
@@ -7,6 +8,16 @@ from app.services.prompt_builder import build_generation_prompt, build_interface
 from app.services.llm_client import LLMClient
 
 router = APIRouter()
+
+
+def _read_optional_positive_int(name: str) -> int | None:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return None
+    val = int(raw)
+    if val <= 0:
+        return None
+    return val
 
 
 @router.post("/generate", response_model=GenerateResponse)
@@ -25,11 +36,12 @@ async def generate(
         raise HTTPException(status_code=400, detail=f"Invalid schema JSON: {e}")
 
     try:
-        # Keep prompt compact to reduce token usage and truncation risk.
+        parse_max_rows = _read_optional_positive_int("PARSE_MAX_ROWS")
+        parse_max_text_chars = _read_optional_positive_int("PARSE_MAX_TEXT_CHARS")
         file_kind, extracted_input_json = await extract_extracted_input(
             file,
-            max_rows=8,
-            max_text_chars=3500,
+            max_rows=parse_max_rows,
+            max_text_chars=parse_max_text_chars,
         )
     except ValueError as e:
         raise HTTPException(status_code=415, detail=str(e))
