@@ -4,6 +4,8 @@ services:
       context: ./backend
     ports:
       - "8000:8000"
+    depends_on:
+      - mysql
     environment:
       - LLM_PROVIDER=${LLM_PROVIDER:-stub}
       - OPENAI_COMPAT_BASE_URL=${OPENAI_COMPAT_BASE_URL:-}
@@ -19,7 +21,7 @@ services:
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-*}
       # Auth / DB
-      - DB_HOST=${DB_HOST:-localhost}
+      - DB_HOST=mysql
       - DB_PORT=${DB_PORT:-3306}
       - DB_NAME=${DB_NAME:-converter_agent}
       - DB_USER=${DB_USER:-converter_agent}
@@ -37,6 +39,18 @@ services:
     volumes:
       - ./backend:/app
 
+  mysql:
+    image: mysql:8
+    restart: unless-stopped
+    environment:
+      - MYSQL_DATABASE=${DB_NAME:-converter_agent}
+      - MYSQL_USER=${DB_USER:-converter_agent}
+      - MYSQL_PASSWORD=${DB_PASSWORD:-change-me}
+      - MYSQL_ROOT_PASSWORD=${DB_PASSWORD:-change-me}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    command: ["--default-authentication-plugin=mysql_native_password"]
+
   frontend:
     build:
       context: ./frontend
@@ -50,3 +64,6 @@ services:
     volumes:
       - ./frontend:/app
       - /app/node_modules
+
+volumes:
+  mysql_data:
