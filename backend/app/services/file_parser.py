@@ -1,5 +1,6 @@
 import io
 import os
+import csv
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -50,6 +51,49 @@ def _to_records_dataframe(df: pd.DataFrame, max_rows: int) -> List[Dict[str, Any
     return records
 
 
+def _detect_csv_delimiter(text_sample: str) -> str:
+    """
+    Detect delimiter from sample text, fallback to semicolon for CRM-style exports.
+    """
+    sample = (text_sample or "").strip()
+    if not sample:
+        return ";"
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+        if getattr(dialect, "delimiter", None):
+            return dialect.delimiter
+    except Exception:
+        pass
+    return ";" if sample.count(";") >= sample.count(",") else ","
+
+
+def _read_csv_dataframe(contents: bytes, *, max_rows: int) -> pd.DataFrame:
+    """
+    Read CSV with delimiter/encoding tolerance.
+    """
+    # Try UTF encodings first (common for modern exports), then cp1251 fallback.
+    decoded_text = ""
+    for enc in ("utf-8-sig", "utf-8", "cp1251"):
+        try:
+            decoded_text = contents.decode(enc)
+            break
+        except Exception:
+            continue
+
+    if not decoded_text:
+        decoded_text = contents.decode("utf-8", errors="replace")
+
+    delimiter = _detect_csv_delimiter(decoded_text[:8000])
+    return pd.read_csv(
+        io.StringIO(decoded_text),
+        sep=delimiter,
+        nrows=max_rows,
+        dtype=str,
+        keep_default_na=False,
+        engine="python",
+    )
+
+
 async def extract_extracted_input(
     file: UploadFile,
     *,
@@ -69,10 +113,10 @@ async def extract_extracted_input(
     file_kind = detect_file_kind(filename, file.content_type)
 
     if file_kind in {"csv", "xls", "xlsx"}:
-        bytes_buf = io.BytesIO(contents)
         if file_kind == "csv":
-            df = pd.read_csv(bytes_buf, nrows=max_rows, dtype=str, keep_default_na=False)
+            df = _read_csv_dataframe(contents, max_rows=max_rows)
         elif file_kind in {"xls", "xlsx"}:
+            bytes_buf = io.BytesIO(contents)
             # sheet_name=0 for MVP
             df = pd.read_excel(bytes_buf, nrows=max_rows, dtype=str, sheet_name=0, engine=None)
         else:
