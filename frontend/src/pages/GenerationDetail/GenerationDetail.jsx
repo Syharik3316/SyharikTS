@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { getGenerationDetailRequest } from '../../api/profileApi';
+import { deleteGenerationRequest, getGenerationDetailRequest } from '../../api/profileApi';
 import { copyTextToClipboard, downloadTextFile, stripFileExt } from '../../utils/fileCopyDownload';
 import styles from './GenerationDetail.module.css';
 
@@ -11,6 +11,8 @@ export default function GenerationDetail() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [detail, setDetail] = useState(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
 
   const [copied, setCopied] = useState(false);
 
@@ -19,6 +21,7 @@ export default function GenerationDetail() {
     (async () => {
       setLoading(true);
       setError('');
+      setDeleteError('');
       try {
         const row = await getGenerationDetailRequest(id);
         setDetail(row);
@@ -44,7 +47,31 @@ export default function GenerationDetail() {
   }
 
   function onCheckTs() {
-    navigate('/upload', { state: { mode: 'checkTs', initialTsCode: detail.generated_ts_code } });
+    navigate('/upload', {
+      state: {
+        mode: 'checkTs',
+        initialTsCode: detail.generated_ts_code,
+        generationId: id,
+        checkInputFileName: detail.main_file_name,
+      },
+    });
+  }
+
+  async function onDelete() {
+    if (!detail || !id) return;
+    const ok = window.confirm('Удалить эту генерацию?');
+    if (!ok) return;
+
+    setDeleteBusy(true);
+    setDeleteError('');
+    try {
+      await deleteGenerationRequest(id);
+      navigate('/profile', { replace: true });
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeleteBusy(false);
+    }
   }
 
   return (
@@ -73,11 +100,21 @@ export default function GenerationDetail() {
               <button type="button" className={`${styles.btn} ${styles.btnPrimary}`} onClick={onCheckTs}>
                 Проверить TS в Upload
               </button>
+              <button
+                type="button"
+                className={`${styles.btn} ${styles.btnDanger}`}
+                onClick={onDelete}
+                disabled={deleteBusy}
+              >
+                {deleteBusy ? 'Удаление…' : 'Удалить'}
+              </button>
             </div>
 
             <div className={styles.codeWrap} style={{ marginTop: 12 }}>
               <pre className={styles.codePre}>{detail.generated_ts_code}</pre>
             </div>
+
+            {deleteError ? <p className={styles.error} style={{ marginTop: 12 }}>{deleteError}</p> : null}
           </>
         ) : null}
       </div>

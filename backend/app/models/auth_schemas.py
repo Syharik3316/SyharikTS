@@ -116,3 +116,9 @@ class GenerationHistoryDetail(BaseModel):
     created_at: datetime
     main_file_name: str
     generated_ts_code: str
+
+
+class GenerationCheckInputResponse(BaseModel):
+    """Base64 of the original uploaded file when stored (see GENERATION_HISTORY_MAX_INPUT_BYTES)."""
+
+    input_base64: str | None = None

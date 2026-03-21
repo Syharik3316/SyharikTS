@@ -1,14 +1,26 @@
-import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import styles from './Login.module.css';
 
 export default function Login() {
   const { login } = useAuth();
+  const location = useLocation();
   const [loginOrEmail, setLoginOrEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [registerOk, setRegisterOk] = useState(false);
+
+  useEffect(() => {
+    const st = location.state;
+    if (st?.fromRegister) {
+      setRegisterOk(true);
+      if (typeof st.email === 'string' && st.email.trim()) {
+        setLoginOrEmail(st.email.trim());
+      }
+    }
+  }, [location.state]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -27,6 +39,12 @@ export default function Login() {
     <section className={styles.page} aria-label="Вход в аккаунт">
       <div className={styles.card}>
         <h1 className={styles.title}>Вход</h1>
+
+        {registerOk ? (
+          <p className={styles.successInline} role="status">
+            Регистрация успешна. Войдите с указанными логином и паролем.
+          </p>
+        ) : null}
 
         <form className={styles.form} onSubmit={handleSubmit} noValidate>
           <div className={styles.field}>

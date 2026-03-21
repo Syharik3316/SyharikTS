@@ -77,13 +77,15 @@ class LLMClient:
         extracted_input_json: Any,
         schema_obj: Any,
         interface_ts: str,
+        file_kind: str,
     ) -> str:
         def finalize_or_fallback(code: str) -> str:
-            if self._is_bad_generated_code(code):
+            if self._is_bad_generated_code(code, file_kind=file_kind):
                 return self._generate_stub_code(
                     extracted_input_json=extracted_input_json,
                     schema_obj=schema_obj,
                     interface_ts=interface_ts,
+                    file_kind=file_kind,
                 )
             return code
 
@@ -92,10 +94,8 @@ class LLMClient:
                 extracted_input_json=extracted_input_json,
                 schema_obj=schema_obj,
                 interface_ts=interface_ts,
+                file_kind=file_kind,
             )
-
-        if self.provider == "ollama":
-            return finalize_or_fallback(self._generate_via_ollama(prompt))
 
         if self.provider == "openai_compatible":
             return finalize_or_fallback(self._generate_via_openai_compatible(prompt))
@@ -130,7 +130,7 @@ class LLMClient:
         # For null/objects/arrays we keep raw.
         return value
 
-    def _is_bad_generated_code(self, code: str) -> bool:
+    def _is_bad_generated_code(self, code: str, *, file_kind: str) -> bool:
         if not code or "export default function" not in code:
             return True
         if looks_like_incomplete_typescript(code):
@@ -141,7 +141,7 @@ class LLMClient:
         if "json.parse(base64file)" in low:
             return True
 
-        if "void base64file;" in code:
+        if "void base64file;" in low:
             return True
 
         if " as any" in low:
@@ -159,12 +159,125 @@ class LLMClient:
         if not (has_decode and has_parse and has_typed_return):
             return True
 
+        if file_kind in {"png", "jpg", "tiff"} and "transcript_b64" not in low:
+            return True
+
         return False
 
-    def _generate_stub_code(self, *, extracted_input_json: Any, schema_obj: Any, interface_ts: str) -> str:
+    def _generate_stub_code(
+        self, *, extracted_input_json: Any, schema_obj: Any, interface_ts: str, file_kind: str
+    ) -> str:
         schema = ensure_json_object(schema_obj)
         schema_compact = json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
         aliases_compact = json.dumps(_build_aliases_for_schema(schema), ensure_ascii=False, separators=(",", ":"))
+
+        if file_kind in {"png", "jpg", "tiff"}:
+            from app.services.image_transcription import transcript_utf8_base64_for_prompt
+
+            transcript = str(ensure_json_object(extracted_input_json).get("text") or "")
+            tb64 = transcript_utf8_base64_for_prompt(transcript)
+            return (
+                f"{interface_ts}\n\n"
+                "export default function (base64file: string): DealData[] {\n"
+                f'  const TRANSCRIPT_B64 = "{tb64}";\n'
+                "  if (base64file == null || !String(base64file).trim()) return [];\n"
+                f"  const schema: Record<string, unknown> = {schema_compact};\n"
+                f"  const aliases: Record<string, string[]> = {aliases_compact};\n"
+                "  const decodeBase64 = (input: string): string => {\n"
+                "    if (!input) return \"\";\n"
+                "    const raw = String(input).trim();\n"
+                "    const payload = raw.includes(\"base64,\") ? raw.slice(raw.indexOf(\"base64,\") + 7) : raw;\n"
+                "    let cleaned = payload.replace(/\\s+/g, \"\").replace(/-/g, \"+\").replace(/_/g, \"/\").replace(/[^A-Za-z0-9+/=]/g, \"\");\n"
+                "    const pad = cleaned.length % 4;\n"
+                "    if (pad > 0) cleaned += \"=\".repeat(4 - pad);\n"
+                "    let text = \"\";\n"
+                "    try {\n"
+                "      if (typeof Buffer !== \"undefined\") {\n"
+                "        text = Buffer.from(cleaned, \"base64\").toString(\"utf-8\");\n"
+                "      } else if (typeof atob !== \"undefined\") {\n"
+                "        const binary = atob(cleaned);\n"
+                "        const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));\n"
+                "        text = new TextDecoder(\"utf-8\", { fatal: false }).decode(bytes);\n"
+                "      }\n"
+                "    } catch {\n"
+                "      return \"\";\n"
+                "    }\n"
+                "    if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);\n"
+                "    return text;\n"
+                "  };\n"
+                "  const parseCsv = (text: string): string[][] => {\n"
+                "    const rows: string[][] = [];\n"
+                "    let row: string[] = [];\n"
+                "    let cell = \"\";\n"
+                "    let inQuotes = false;\n"
+                "    for (let i = 0; i < text.length; i++) {\n"
+                "      const ch = text[i];\n"
+                "      if (ch === '\"') {\n"
+                "        if (inQuotes && text[i + 1] === '\"') { cell += '\"'; i++; } else { inQuotes = !inQuotes; }\n"
+                "      } else if (ch === ';' && !inQuotes) {\n"
+                "        row.push(cell); cell = \"\";\n"
+                "      } else if ((ch === '\\n' || ch === '\\r') && !inQuotes) {\n"
+                "        if (ch === '\\r' && text[i + 1] === '\\n') i++;\n"
+                "        row.push(cell); cell = \"\";\n"
+                "        if (row.some((x) => x !== \"\")) rows.push(row);\n"
+                "        row = [];\n"
+                "      } else {\n"
+                "        cell += ch;\n"
+                "      }\n"
+                "    }\n"
+                "    row.push(cell);\n"
+                "    if (row.some((x) => x !== \"\")) rows.push(row);\n"
+                "    return rows;\n"
+                "  };\n"
+                "  const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9а-яё]+/gi, \"\");\n"
+                "  const toNumber = (s: string): number => {\n"
+                "    const n = Number(String(s || \"\").trim().replace(/\\s+/g, \"\").replace(\",\", \".\"));\n"
+                "    return Number.isFinite(n) ? n : 0;\n"
+                "  };\n"
+                "  const toBoolean = (s: string): boolean => [\"1\",\"true\",\"yes\",\"y\",\"да\"].includes(String(s || \"\").trim().toLowerCase());\n"
+                "  const cast = (value: string, example: unknown): unknown => {\n"
+                "    if (typeof example === \"number\") return toNumber(value);\n"
+                "    if (typeof example === \"boolean\") return toBoolean(value);\n"
+                "    if (example === null) {\n"
+                "      const t = String(value || \"\").trim();\n"
+                "      return t === \"\" ? null : t;\n"
+                "    }\n"
+                "    return String(value ?? \"\");\n"
+                "  };\n"
+                "  const csv = decodeBase64(TRANSCRIPT_B64);\n"
+                "  const table = parseCsv(csv);\n"
+                "  if (!table.length) return [];\n"
+                "  const headers = table[0].map((h) => String(h ?? \"\").trim());\n"
+                "  const idxByHeader = new Map<string, number>();\n"
+                "  headers.forEach((h, i) => idxByHeader.set(norm(h), i));\n"
+                "  const keys = Object.keys(schema);\n"
+                "  const result: DealData[] = [];\n"
+                "  for (let r = 1; r < table.length; r++) {\n"
+                "    const line = table[r];\n"
+                "    const obj: Record<string, unknown> = {};\n"
+                "    for (const key of keys) {\n"
+                "      const names = [key, ...(aliases[key] ?? [])];\n"
+                "      let idx: number | undefined = undefined;\n"
+                "      for (const name of names) {\n"
+                "        const found = idxByHeader.get(norm(name));\n"
+                "        if (found !== undefined) { idx = found; break; }\n"
+                "      }\n"
+                "      const raw = idx === undefined ? \"\" : String(line[idx] ?? \"\");\n"
+                "      if (key === \"dealStageFinal\") {\n"
+                "        const stageIdx = idxByHeader.get(norm(\"Стадия (Сделка)\"));\n"
+                "        const stageRaw = stageIdx === undefined ? \"\" : String(line[stageIdx] ?? \"\");\n"
+                "        const st = stageRaw.trim().toLowerCase();\n"
+                "        obj[key] = st === \"закрыта\" || st === \"отклонена\";\n"
+                "      } else {\n"
+                "        obj[key] = cast(raw, schema[key]);\n"
+                "      }\n"
+                "    }\n"
+                "    result.push(obj as DealData);\n"
+                "  }\n"
+                "  return result;\n"
+                "}\n"
+            )
+
         return (
             f"{interface_ts}\n\n"
             "export default function (base64file: string): DealData[] {\n"
@@ -264,21 +377,6 @@ class LLMClient:
             "  return result;\n"
             "}\n"
         )
-
-    def _generate_via_ollama(self, prompt: str) -> str:
-        from langchain_community.chat_models import ChatOllama
-        from langchain_core.messages import HumanMessage
-
-        base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-        model = os.getenv("OLLAMA_MODEL", "llama3")
-
-        llm = ChatOllama(
-            base_url=base_url,
-            model=model,
-            temperature=0,
-        )
-        msg = llm.invoke([HumanMessage(content=prompt)])
-        return extract_typescript_code(msg.content or "")
 
     def _generate_via_openai_compatible(self, prompt: str) -> str:
         from langchain_openai import ChatOpenAI
@@ -421,6 +519,121 @@ class LLMClient:
                     code = code_retry or code
 
         return code
+
+    def transcribe_image_via_gigachat(self, contents: bytes, file_kind: str) -> str:
+        """
+        Превращает изображение в текст через GigaChat vision (по примеру из ai.md):
+          1) загрузка изображения в /files (purpose="general")
+          2) вызов /chat/completions с attachments=[file_id] и function_call="auto"
+        """
+
+        auth_key = (os.getenv("GIGACHAT_AUTHORIZATION_KEY") or "").strip()
+        if not auth_key:
+            raise ValueError("For gigachat image transcription set GIGACHAT_AUTHORIZATION_KEY.")
+
+        base_url = (os.getenv("GIGACHAT_BASE_URL") or "https://gigachat.devices.sberbank.ru/api/v1").strip().rstrip("/")
+        model = (os.getenv("GIGACHAT_MODEL") or "").strip() or "GigaChat-2-Max"
+
+        verify_tls_env = (os.getenv("GIGACHAT_VERIFY_TLS") or "false").strip().lower()
+        verify_tls = verify_tls_env in {"1", "true", "yes", "y", "on"}
+
+        token, _expires_at = self._get_gigachat_access_token(auth_key=auth_key, verify_tls=verify_tls)
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {token}",
+        }
+
+        mime_name = {
+            "png": ("image/png", "upload.png"),
+            "jpg": ("image/jpeg", "upload.jpg"),
+            "tiff": ("image/tiff", "upload.tiff"),
+            "jpeg": ("image/jpeg", "upload.jpeg"),
+        }.get(file_kind, ("image/png", "upload.png"))
+        mime, filename = mime_name
+
+        vision_prompt = (
+            "Распознай весь видимый текст на изображении. Сохрани переносы строк. "
+            "Если это таблица или выгрузка, разделяй колонки точкой с запятой (;), как в CSV. "
+            "Выведи только текст, без markdown и пояснений."
+        )
+
+        upload_url = f"{base_url}/files"
+        timeout_upload = int((os.getenv("GIGACHAT_FILE_UPLOAD_TIMEOUT_SECONDS") or "120").strip() or "120")
+        try:
+            up = requests.post(
+                upload_url,
+                headers=headers,
+                files={"file": (filename, contents, mime)},
+                data={"purpose": "general"},
+                timeout=timeout_upload,
+                verify=verify_tls,
+            )
+        except Exception:
+            return ""
+
+        if up.status_code != 200:
+            return ""
+
+        try:
+            up_body = up.json()
+        except Exception:
+            return ""
+
+        file_id = up_body.get("id") if isinstance(up_body, dict) else None
+        if not file_id:
+            return ""
+
+        chat_url = f"{base_url}/chat/completions"
+        timeout_chat = int((os.getenv("GIGACHAT_TIMEOUT_SECONDS") or "120").strip() or "120")
+
+        payload: Dict[str, Any] = {
+            "model": model,
+            "function_call": "auto",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": vision_prompt,
+                    "attachments": [str(file_id)],
+                }
+            ],
+            "stream": False,
+            "temperature": 0,
+            "n": 1,
+            "repetition_penalty": 1,
+            "update_interval": 0,
+        }
+
+        raw_max = (os.getenv("GIGACHAT_IMAGE_TRANSCRIPTION_MAX_TOKENS") or "").strip()
+        if raw_max.isdigit() and int(raw_max) > 0:
+            payload["max_tokens"] = int(raw_max)
+
+        content_out = ""
+        try:
+            resp = requests.post(
+                chat_url,
+                headers={**headers, "Content-Type": "application/json"},
+                json=payload,
+                timeout=timeout_chat,
+                verify=verify_tls,
+            )
+            if resp.status_code != 200:
+                return ""
+
+            data = resp.json()
+            if isinstance(data, dict):
+                choices = data.get("choices") or []
+                if choices and isinstance(choices, list):
+                    first = choices[0] or {}
+                    message = first.get("message") or {}
+                    content_out = (message.get("content") or "").strip()
+        finally:
+            try:
+                del_url = f"{base_url}/files/{file_id}/delete"
+                requests.post(del_url, headers=headers, timeout=30, verify=verify_tls)
+            except Exception:
+                pass
+
+        return content_out
 
     _gigachat_token_cache: Optional[Tuple[str, float]] = None
 

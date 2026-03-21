@@ -53,11 +53,14 @@ npm run dev
 
 Frontend по умолчанию: `http://localhost:5173`.
 
+**Прокси:** при пустом `VITE_API_BASE_URL` dev-сервер Vite перенаправляет `/auth`, `/me`, `/generate`, `/infer-schema`, `/health` и `PATCH /profile` на uvicorn (по умолчанию `http://127.0.0.1:8000`, переопределение: `DEV_API_PROXY_TARGET` в `.env`). На продакшене nginx должен проксировать те же префиксы; образец — [`test_files/nginx.config`](test_files/nginx.config) (`/me` и отдельно `/profile` для PATCH, иначе история генераций получит HTML вместо JSON).
+
 ## Авторизация и БД
 
 - Таблицы создаются SQL-файлами в `backend/migrations/` (в репозитории их сейчас два):
   - [`backend/migrations/001_auth_tables.sql`](backend/migrations/001_auth_tables.sql) — пользователи/почта/refresh-токены
   - [`backend/migrations/002_generation_history.sql`](backend/migrations/002_generation_history.sql) — история генераций (TS-код + схема)
+  - [`backend/migrations/003_generation_history_input_base64.sql`](backend/migrations/003_generation_history_input_base64.sql) — опционально сохраняемый исходный файл (base64) для проверки TS из истории
 - На Ubuntu после создания БД (см. `scripts/init_syharikts_db.sh`) примените миграции:
   ```bash
   export DATABASE_URL='postgresql+asyncpg://USER:PASS@127.0.0.1:5432/syharikts'
@@ -87,6 +90,7 @@ Frontend по умолчанию: `http://localhost:5173`.
 - `PATCH /profile` (Bearer)
 - `GET /me/generations` (Bearer)
 - `GET /me/generations/{id}` (Bearer)
+- `GET /me/generations/{id}/check-input` (Bearer) — сохранённый base64 исходного файла для клиентской проверки (если есть)
 - `POST /generate` (Bearer)
 - `POST /infer-schema` (Bearer)
 
@@ -186,7 +190,7 @@ curl -X POST "http://localhost:8000/infer-schema" \
 - Для `odt` используется `odfpy`.
 - Для `epub` используется `ebooklib` + `BeautifulSoup`.
 - Для `doc` используется best-effort извлечение текста из бинарного контента.
-- Для изображений (`png/jpg/tiff`) используется `pytesseract` с предобработкой (`grayscale + autocontrast`) и fallback по `PSM`.
+- Для изображений (`png/jpg/tiff`) используется `GigaChat vision`: изображение сначала загружается в `/files`, затем распознаётся через `/chat/completions` с `attachments`.
 
 Если OCR/декодирование не смогли извлечь текст, backend возвращает контролируемую ошибку с кодом.
 
@@ -194,7 +198,7 @@ curl -X POST "http://localhost:8000/infer-schema" \
 
 ### LLM
 
-- `LLM_PROVIDER` (`stub`, `ollama`, `openai_compatible`, `gigachat`)
+- `LLM_PROVIDER` (`stub`, `openai_compatible`, `gigachat`)
 - `OPENAI_COMPAT_BASE_URL`
 - `OPENAI_COMPAT_API_KEY`
 - `OPENAI_COMPAT_MODEL`
@@ -207,15 +211,14 @@ curl -X POST "http://localhost:8000/infer-schema" \
 - `GIGACHAT_MAX_TOKENS`
 - `GIGACHAT_RETRY_ATTEMPTS`
 - `GIGACHAT_TIMEOUT_SECONDS`
-- `OLLAMA_BASE_URL`
+- `GIGACHAT_IMAGE_TRANSCRIPTION_MAX_TOKENS` (опционально)
+- `GIGACHAT_FILE_UPLOAD_TIMEOUT_SECONDS` (опционально)
 
 ### Парсер
 
 - `PARSE_MAX_ROWS`
 - `PARSE_MAX_TEXT_CHARS`
-- `OCR_LANG` (например `eng+rus`)
-- `OCR_PSM` (например `6`)
-- `OCR_FALLBACK_PSM` (например `11`)
+- OCR-параметры (`OCR_LANG`, `OCR_PSM`, `OCR_FALLBACK_PSM`) больше не нужны, т.к. распознавание картинок идёт через GigaChat.
 
 ### Auth / почта / reCAPTCHA
 

@@ -30,6 +30,11 @@
   letter-spacing: 0.02em;
 }
 
+.title + .successInline {
+  margin-top: -24px;
+  margin-bottom: 24px;
+}
+
 .form {
   display: flex;
   flex-direction: column;

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { listGenerationsRequest, updateProfileRequest } from '../../api/profileApi';
@@ -18,6 +18,7 @@ export default function Profile() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState('');
   const [items, setItems] = useState([]);
+  const historyScrollerRef = useRef(null);
 
   useEffect(() => {
     if (user) {
@@ -150,24 +151,56 @@ export default function Profile() {
             ) : null}
 
             {!historyLoading ? (
-              <ul className={styles.historyList} aria-label="История генераций">
-                {items.map((it) => (
-                  <li key={it.id}>
-                    <button
-                      type="button"
-                      className={styles.historyItemBtn}
-                      onClick={() => navigate(`/profile/generations/${it.id}`)}
-                    >
-                      <div className={styles.historyItemMeta}>
-                        <span className={styles.historyDate}>
-                          {new Date(it.created_at).toLocaleString()}
-                        </span>
-                        <span className={styles.historyFile}>{it.main_file_name}</span>
-                      </div>
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              <div className={styles.historyScrollerWrap}>
+                <div className={styles.historyScrollButtons}>
+                  <button
+                    type="button"
+                    className={styles.scrollBtn}
+                    onClick={() => {
+                      const el = historyScrollerRef.current;
+                      if (!el) return;
+                      el.scrollBy({ top: -Math.round(el.clientHeight * 0.8), behavior: 'smooth' });
+                    }}
+                    aria-label="Листать историю вверх"
+                  >
+                    ↑
+                  </button>
+
+                  <button
+                    type="button"
+                    className={styles.scrollBtn}
+                    onClick={() => {
+                      const el = historyScrollerRef.current;
+                      if (!el) return;
+                      el.scrollBy({ top: Math.round(el.clientHeight * 0.8), behavior: 'smooth' });
+                    }}
+                    aria-label="Листать историю вниз"
+                  >
+                    ↓
+                  </button>
+                </div>
+
+                <div className={styles.historyScroller} ref={historyScrollerRef}>
+                  <ul className={styles.historyList} aria-label="История генераций">
+                    {items.map((it) => (
+                      <li key={it.id}>
+                        <button
+                          type="button"
+                          className={styles.historyItemBtn}
+                          onClick={() => navigate(`/profile/generations/${it.id}`)}
+                        >
+                          <div className={styles.historyItemMeta}>
+                            <span className={styles.historyDate}>
+                              {new Date(it.created_at).toLocaleString()}
+                            </span>
+                            <span className={styles.historyFile}>{it.main_file_name}</span>
+                          </div>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
             ) : null}
           </div>
         </div>

@@ -26,9 +26,7 @@
 }
 
 .logo {
-  width: 44px;
-  height: 44px;
-  border-radius: 16px;
+  height: clamp(40px, 7vw, 56px);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -36,10 +34,11 @@
 }
 
 .logoImg {
-  width: 100%;
+  width: auto;
   height: 100%;
   object-fit: contain;
   display: block;
+  max-width: min(320px, 70vw);
 }
 
 .subtitle {

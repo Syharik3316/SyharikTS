@@ -20,9 +20,14 @@ export async function fileToBase64(file: File): Promise<string> {
 }
 
 /**
- * Transpile TS, run default export on base64 file, return formatted JSON preview string.
+ * Transpile TS, run default export on base64 file contents, return formatted JSON preview string.
  */
-export async function runTsCheckOnFile(codeInput: string, inputFile: File): Promise<string> {
+export async function runTsCheckWithBase64(codeInput: string, inputBase64: string): Promise<string> {
+  const trimmed = inputBase64.trim();
+  if (!trimmed) {
+    throw new Error("Пустой base64 входного файла.");
+  }
+
   const sourceForTranspile = stripInterfaceBlocks(codeInput);
 
   const transpiled = ts.transpileModule(sourceForTranspile, {
@@ -51,8 +56,7 @@ export async function runTsCheckOnFile(codeInput: string, inputFile: File): Prom
       throw new Error("Generated module does not export default function.");
     }
 
-    const base64file = await fileToBase64(inputFile);
-    const res = await (fn as (b: string) => unknown)(base64file);
+    const res = await (fn as (b: string) => unknown)(trimmed);
 
     if (!Array.isArray(res)) {
       throw new Error("Function result is not an array.");
@@ -73,4 +77,12 @@ export async function runTsCheckOnFile(codeInput: string, inputFile: File): Prom
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+/**
+ * Transpile TS, run default export on base64 file, return formatted JSON preview string.
+ */
+export async function runTsCheckOnFile(codeInput: string, inputFile: File): Promise<string> {
+  const base64file = await fileToBase64(inputFile);
+  return runTsCheckWithBase64(codeInput, base64file);
 }

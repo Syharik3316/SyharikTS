@@ -89,6 +89,16 @@
   background: var(--accent-soft);
 }
 
+.btnDanger {
+  border-color: rgba(255, 107, 107, 0.6);
+  background: color-mix(in srgb, #ff6b6b 14%, transparent);
+}
+
+.btnDanger:hover:not(:disabled) {
+  border-color: rgba(255, 107, 107, 0.9);
+  background: color-mix(in srgb, #ff6b6b 22%, transparent);
+}
+
 .error {
   margin: 0;
   padding: 10px 12px;

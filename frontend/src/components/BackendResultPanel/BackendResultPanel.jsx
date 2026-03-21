@@ -9,6 +9,7 @@ export default function BackendResultPanel({
   title = 'Ответ сервера',
   text,
   loading,
+  loadingHint = 'Загрузка ответа…',
   error,
   onClose,
   className = '',
@@ -67,7 +68,15 @@ export default function BackendResultPanel({
       </div>
       <div className={styles.body}>
         {loading ? (
-          <p className={styles.status}>Загрузка ответа…</p>
+          <div className={styles.loadingBlock} role="status" aria-label={loadingHint}>
+            <div className={styles.loadingSpinner} aria-hidden="true" />
+            <p className={styles.status}>{loadingHint}</p>
+            <div className={styles.skeleton} aria-hidden="true">
+              <div className={styles.skeletonLine} />
+              <div className={styles.skeletonLine} />
+              <div className={styles.skeletonLineShort} />
+            </div>
+          </div>
         ) : null}
         {error && !loading ? (
           <p className={styles.error} role="alert">

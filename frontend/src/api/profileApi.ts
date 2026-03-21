@@ -12,6 +12,10 @@ export type GenerationHistoryDetail = GenerationHistoryItem & {
   generated_ts_code: string;
 };
 
+export type GenerationCheckInputResponse = {
+  input_base64: string | null;
+};
+
 async function safeReadJson<T>(res: Response): Promise<T> {
   const text = await res.text();
   try {
@@ -81,5 +85,32 @@ export async function getGenerationDetailRequest(generationId: string): Promise<
     });
   }
   return safeReadJson<GenerationHistoryDetail>(res);
+}
+
+export async function getGenerationCheckInputRequest(generationId: string): Promise<GenerationCheckInputResponse> {
+  const res = await authorizedFetch(`/me/generations/${generationId}/check-input`, { method: 'GET' });
+  if (!res.ok) {
+    const { status, detail, code } = await parseBackendError(res);
+    throw new ApiError({
+      status,
+      detail,
+      code,
+      userMessage: mapStatusToUserMessage(status, detail, code),
+    });
+  }
+  return safeReadJson<GenerationCheckInputResponse>(res);
+}
+
+export async function deleteGenerationRequest(generationId: string): Promise<void> {
+  const res = await authorizedFetch(`/me/generations/${generationId}`, { method: 'DELETE' });
+  if (!res.ok) {
+    const { status, detail, code } = await parseBackendError(res);
+    throw new ApiError({
+      status,
+      detail,
+      code,
+      userMessage: mapStatusToUserMessage(status, detail, code),
+    });
+  }
 }
 

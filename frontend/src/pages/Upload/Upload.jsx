@@ -5,7 +5,8 @@ import { generateTsCode, inferSchemaExample } from '../../api';
 import { ApiError } from '../../httpError';
 import { ACCEPT_ATTR, SUPPORTED_EXT_SET } from '../../constants/supportedFiles';
 import { useAuth } from '../../context/AuthContext';
-import { runTsCheckOnFile } from '../../utils/checkTsClient';
+import { getGenerationCheckInputRequest } from '../../api/profileApi';
+import { runTsCheckOnFile, runTsCheckWithBase64 } from '../../utils/checkTsClient';
 import { copyTextToClipboard, downloadTextFile, stripFileExt } from '../../utils/fileCopyDownload';
 import styles from './Upload.module.css';
 
@@ -52,6 +53,12 @@ function filterAllowedFiles(fileList) {
   return ok;
 }
 
+/** Только один файл: берём первый подходящий. */
+function pickSingleAllowedFile(fileList) {
+  const ok = filterAllowedFiles(fileList);
+  return ok.length ? [ok[0]] : [];
+}
+
 function formatSupportedFormatsShort() {
   return 'CSV, XLS, XLSX, PDF, DOCX, DOC, PNG, JPG, TIFF, TXT, MD, RTF, ODT, XML, EPUB, FB2';
 }
@@ -72,6 +79,10 @@ export default function Upload() {
   const [inferLoading, setInferLoading] = useState(false);
   const [inferError, setInferError] = useState('');
   const [tsCopied, setTsCopied] = useState(false);
+  const [checkInputBase64, setCheckInputBase64] = useState(null);
+  const [checkInputLoading, setCheckInputLoading] = useState(false);
+  const [checkInputError, setCheckInputError] = useState('');
+  const [checkInputFileLabel, setCheckInputFileLabel] = useState('');
   const fileInputRef = useRef(null);
   const shrinkTimerRef = useRef(null);
 
@@ -79,6 +90,7 @@ export default function Upload() {
   const showRightPanel = viewState === 'split';
 
   const primaryFile = files.length > 0 ? files[0] : null;
+  const generationBusy = mode === MODES.generation && (inferLoading || backendLoading);
 
   const clearShrinkTimer = useCallback(() => {
     if (shrinkTimerRef.current != null) {
@@ -89,7 +101,7 @@ export default function Upload() {
 
   useEffect(() => () => clearShrinkTimer(), [clearShrinkTimer]);
 
-  // Prefill for navigation from generation detail page.
+  // Prefill for navigation from generation detail page + load saved upload for TS check.
   useEffect(() => {
     const st = location.state || {};
     if (st && st.mode === MODES.checkTs && typeof st.initialTsCode === 'string') {
@@ -101,12 +113,45 @@ export default function Upload() {
         setBackendError('');
       }
     }
+
+    const gid = typeof st.generationId === 'string' && st.generationId.trim() ? st.generationId.trim() : null;
+    const label = typeof st.checkInputFileName === 'string' ? st.checkInputFileName : '';
+    setCheckInputFileLabel(label);
+
+    if (!gid) {
+      setCheckInputBase64(null);
+      setCheckInputError('');
+      setCheckInputLoading(false);
+      return undefined;
+    }
+
+    let cancelled = false;
+    setCheckInputBase64(null);
+    setCheckInputError('');
+    setCheckInputLoading(true);
+    getGenerationCheckInputRequest(gid)
+      .then((r) => {
+        if (cancelled) return;
+        const b64 = r?.input_base64 && String(r.input_base64).trim() ? String(r.input_base64).trim() : null;
+        setCheckInputBase64(b64);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setCheckInputError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setCheckInputLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [location.key]);
 
   const addFiles = useCallback((fileList) => {
-    const next = filterAllowedFiles(fileList);
+    const next = pickSingleAllowedFile(fileList);
     if (!next.length) return;
-    setFiles((prev) => [...prev, ...next]);
+    setFiles(next);
   }, []);
 
   const handleFileInputChange = (e) => {
@@ -155,6 +200,7 @@ export default function Upload() {
     e.preventDefault();
     e.stopPropagation();
     setIsDragOver(false);
+    if (mode === MODES.generation && (inferLoading || backendLoading)) return;
     addFiles(e.dataTransfer.files);
   };
 
@@ -162,6 +208,7 @@ export default function Upload() {
   useEffect(() => {
     const onPaste = (e) => {
       if (mode !== MODES.generation) return;
+      if (inferLoading || backendLoading) return;
       const clipboardData = e.clipboardData;
       if (!clipboardData || !clipboardData.items) return;
 
@@ -175,13 +222,13 @@ export default function Upload() {
 
       if (!nextFiles.length) return;
       e.preventDefault();
-      addFiles(nextFiles);
+      addFiles([nextFiles[0]]);
       setIsDragOver(false);
     };
 
     window.addEventListener('paste', onPaste);
     return () => window.removeEventListener('paste', onPaste);
-  }, [mode, addFiles]);
+  }, [mode, addFiles, inferLoading, backendLoading]);
 
   function handleApiError(err) {
     if (err instanceof ApiError) {
@@ -259,8 +306,18 @@ export default function Upload() {
       setBackendLoading(false);
       return;
     }
-    if (!primaryFile) {
-      setBackendError('Выберите файл на вкладке «Генерация» (первый в списке используется для проверки).');
+    if (checkInputLoading && !primaryFile) {
+      setBackendError('Подождите: загружается сохранённый файл с сервера…');
+      startResultPanel();
+      setBackendLoading(false);
+      return;
+    }
+    const savedB64 = checkInputBase64 && String(checkInputBase64).trim() ? String(checkInputBase64).trim() : '';
+    if (!primaryFile && !savedB64) {
+      setBackendError(
+        checkInputError ||
+          'Нет входного файла: для этой записи он не сохранён (слишком большой или старая генерация), либо откройте «Проверить TS» из истории. Выберите файл на вкладке «Генерация».',
+      );
       startResultPanel();
       setBackendLoading(false);
       return;
@@ -268,7 +325,9 @@ export default function Upload() {
     startResultPanel();
     setBackendLoading(true);
     try {
-      const preview = await runTsCheckOnFile(tsCodeText, primaryFile);
+      const preview = primaryFile
+        ? await runTsCheckOnFile(tsCodeText, primaryFile)
+        : await runTsCheckWithBase64(tsCodeText, savedB64);
       setBackendText(preview);
     } catch (err) {
       setBackendError(err instanceof Error ? err.message : String(err));
@@ -346,7 +405,9 @@ export default function Upload() {
           {mode === MODES.generation ? (
             <>
               <div
-                className={`${styles.dropAreaWrap} ${isDragOver ? styles.dropAreaWrapActive : ''}`}
+                className={`${styles.dropAreaWrap} ${isDragOver ? styles.dropAreaWrapActive : ''} ${
+                  generationBusy ? styles.dropAreaWrapBusy : ''
+                }`}
                 onDragEnter={handleDragEnter}
                 onDragLeave={handleDragLeave}
                 onDragOver={handleDragOver}
@@ -357,25 +418,26 @@ export default function Upload() {
                   id="upload-files-input"
                   className={styles.hiddenFileInput}
                   type="file"
-                  multiple
                   accept={ACCEPT_ATTR}
                   onChange={handleFileInputChange}
-                  aria-label="Выбор файлов"
+                  aria-label="Выбор одного файла"
+                  disabled={generationBusy}
                 />
                 <label
-                  className={styles.dropZone}
+                  className={`${styles.dropZone} ${generationBusy ? styles.dropZoneDisabled : ''}`}
                   htmlFor="upload-files-input"
-                  tabIndex={0}
+                  tabIndex={generationBusy ? -1 : 0}
                   onKeyDown={(e) => {
+                    if (generationBusy) return;
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
                       fileInputRef.current?.click();
                     }
                   }}
                 >
-                  <span className={styles.dropTitle}>Файлы</span>
+                  <span className={styles.dropTitle}>Файл</span>
                   <span className={styles.dropHint}>
-                    Перетащите сюда или нажмите, чтобы выбрать на компьютере
+                    Перетащите сюда один файл или нажмите, чтобы выбрать
                   </span>
                   <span className={styles.dropFormats}>
                     Поддерживаются: {formatSupportedFormatsShort()}
@@ -383,7 +445,7 @@ export default function Upload() {
                 </label>
 
                 {files.length > 0 ? (
-                  <ul className={styles.fileList} aria-label="Выбранные файлы">
+                  <ul className={styles.fileList} aria-label="Выбранный файл">
                     {files.map((f) => (
                       <li key={`${f.name}-${f.size}-${f.lastModified}`} className={styles.fileItem}>
                         {f.name}
@@ -391,10 +453,16 @@ export default function Upload() {
                     ))}
                   </ul>
                 ) : null}
-                {files.length > 1 ? (
-                  <p className={styles.fileHint}>
-                    Для запросов к серверу используется первый файл в списке.
-                  </p>
+                {generationBusy ? (
+                  <div className={styles.busyOverlay} aria-live="polite" aria-busy="true">
+                    <div className={styles.busySpinner} aria-hidden="true" />
+                    <p className={styles.busyText}>
+                      {inferLoading
+                        ? 'Анализируем файл и строим пример схемы…'
+                        : 'Генерируем TypeScript на сервере…'}
+                    </p>
+                    <div className={styles.busyShimmer} aria-hidden="true" />
+                  </div>
                 ) : null}
               </div>
 
@@ -424,7 +492,14 @@ export default function Upload() {
                     onClick={handleInferSchema}
                     disabled={inferLoading || !primaryFile || backendLoading}
                   >
-                    {inferLoading ? '…' : 'Сгенерировать схему из файла'}
+                    {inferLoading ? (
+                      <span className={styles.btnWithSpinner}>
+                        <span className={styles.inlineSpinner} aria-hidden="true" />
+                        Схема…
+                      </span>
+                    ) : (
+                      'Сгенерировать схему из файла'
+                    )}
                   </button>
                   <button
                     type="button"
@@ -432,7 +507,14 @@ export default function Upload() {
                     onClick={handleGenerateTs}
                     disabled={backendLoading || viewState === 'shrinking' || inferLoading}
                   >
-                    Сгенерировать TS-код
+                    {backendLoading ? (
+                      <span className={styles.btnWithSpinner}>
+                        <span className={styles.inlineSpinner} aria-hidden="true" />
+                        Генерация…
+                      </span>
+                    ) : (
+                      'Сгенерировать TS-код'
+                    )}
                   </button>
                 </div>
               </div>
@@ -472,17 +554,28 @@ export default function Upload() {
                 </button>
               </div>
               <p className={styles.fileHint}>
-                Исходный файл для проверки — первый из списка на вкладке «Генерация».
-                {!primaryFile ? ' Сейчас файл не выбран.' : ''}
+                {checkInputLoading
+                  ? 'Загружаем исходный файл, сохранённый при генерации…'
+                  : checkInputBase64
+                    ? `Используется сохранённый файл${checkInputFileLabel ? ` (${checkInputFileLabel})` : ''}. При необходимости выберите другой файл на вкладке «Генерация» — он будет иметь приоритет.`
+                    : 'Исходный файл для проверки — выбранный файл на вкладке «Генерация» или сохранённая копия при переходе из истории.'}
+                {!primaryFile && !checkInputBase64 && !checkInputLoading ? ' Сейчас входного файла нет.' : ''}
               </p>
               <div className={styles.uploadActions}>
                 <button
                   type="button"
                   className={`${styles.actionBtn} ${styles.actionBtnPrimary}`}
                   onClick={handleCheckTs}
-                  disabled={backendLoading || viewState === 'shrinking'}
+                  disabled={backendLoading || viewState === 'shrinking' || (checkInputLoading && !primaryFile)}
                 >
-                  {backendLoading ? '…' : 'Проверить код'}
+                  {backendLoading ? (
+                    <span className={styles.btnWithSpinner}>
+                      <span className={styles.inlineSpinner} aria-hidden="true" />
+                      Проверка…
+                    </span>
+                  ) : (
+                    'Проверить код'
+                  )}
                 </button>
               </div>
             </div>
@@ -494,11 +587,16 @@ export default function Upload() {
             title={resultTitle}
             text={backendText}
             loading={backendLoading}
+            loadingHint={
+              mode === MODES.checkTs
+                ? 'Выполняем проверку в браузере…'
+                : 'Генерируем код на сервере…'
+            }
             error={backendError}
             onClose={handleCloseResultPanel}
             className={styles.resultPanel}
             fileKind={mode === MODES.checkTs ? 'json' : 'ts'}
-            fileBaseName={primaryFile?.name || 'result'}
+            fileBaseName={primaryFile?.name || checkInputFileLabel || 'result'}
           />
         ) : null}
       </div>

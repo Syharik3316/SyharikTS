@@ -130,12 +130,85 @@
   color: var(--text);
 }
 
+.loadingBlock {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 8px 4px 12px;
+  min-height: 120px;
+}
+
+.loadingSpinner {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 3px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-top-color: var(--accent);
+  animation: panelSpin 0.9s linear infinite;
+}
+
+@keyframes panelSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.skeleton {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.skeletonLine,
+.skeletonLineShort {
+  height: 10px;
+  border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--muted) 18%, transparent) 0%,
+    color-mix(in srgb, var(--accent) 22%, transparent) 50%,
+    color-mix(in srgb, var(--muted) 18%, transparent) 100%
+  );
+  background-size: 200% 100%;
+  animation: skeletonPulse 1.2s ease-in-out infinite;
+}
+
+.skeletonLine {
+  width: 100%;
+}
+
+.skeletonLineShort {
+  width: 62%;
+}
+
+@keyframes skeletonPulse {
+  0% {
+    background-position: 100% 0;
+    opacity: 0.65;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    background-position: -100% 0;
+    opacity: 0.65;
+  }
+}
+
 .status,
 .placeholder {
   margin: 0;
   font-size: 14px;
   color: var(--muted);
   line-height: 1.45;
+}
+
+.loadingBlock .status {
+  color: var(--text);
+  font-weight: 600;
 }
 
 .error {

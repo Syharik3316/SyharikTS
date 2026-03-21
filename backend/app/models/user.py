@@ -80,5 +80,6 @@ class GenerationHistory(Base):
     generated_ts_code: Mapped[str] = mapped_column(Text, nullable=False)
     schema_text: Mapped[str] = mapped_column(Text, nullable=False)
     main_file_name: Mapped[str] = mapped_column(String(512), nullable=False)
+    input_file_base64: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     user: Mapped["User"] = relationship(back_populates="generation_history")

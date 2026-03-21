@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.dependencies.auth import get_current_user
 from app.models.auth_schemas import (
+    GenerationCheckInputResponse,
     GenerationHistoryDetail,
     GenerationHistoryItem,
     ProfileUpdateRequest,
@@ -70,6 +71,29 @@ async def list_generations(
         GenerationHistoryItem(id=row.id, created_at=row.created_at, main_file_name=row.main_file_name)
         for row in rows
     ]
+
+
+@router.get("/me/generations/{generation_id}/check-input", response_model=GenerationCheckInputResponse)
+async def get_generation_check_input(
+    generation_id: uuid.UUID,
+    db: AsyncSession | None = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    if db is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database is not configured")
+
+    res = await db.execute(
+        select(GenerationHistory).where(
+            GenerationHistory.user_id == user.id,
+            GenerationHistory.id == generation_id,
+        )
+    )
+    row = res.scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Generation not found")
+
+    b64 = row.input_file_base64
+    return GenerationCheckInputResponse(input_base64=b64 if isinstance(b64, str) and b64.strip() else None)
 
 
 @router.get("/me/generations/{generation_id}", response_model=GenerationHistoryDetail)

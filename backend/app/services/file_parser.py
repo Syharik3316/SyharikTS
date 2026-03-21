@@ -165,6 +165,25 @@ def _truncate_text(text: str, max_text_chars: Optional[int]) -> str:
     return text
 
 
+def _extract_image_transcript(contents: bytes, file_kind: str) -> str:
+    from app.services.image_transcription import transcribe_image_with_gigachat
+
+    try:
+        text = transcribe_image_with_gigachat(contents, file_kind).strip()
+    except ValueError as e:
+        raise ParseFileError(code="OCR_NO_TEXT", message=str(e)) from e
+
+    if not text:
+        raise ParseFileError(
+            code="OCR_NO_TEXT",
+            message=(
+                "GigaChat не вернул текст с изображения. Проверьте GIGACHAT_AUTHORIZATION_KEY, "
+                "модель с поддержкой изображений (GigaChat-2-Pro/Max), лимиты API и качество снимка."
+            ),
+        )
+    return text
+
+
 def _join_non_empty_lines(lines: List[str]) -> str:
     return "\n".join([ln.strip() for ln in lines if ln and ln.strip()])
 
@@ -267,23 +286,21 @@ def _normalize_broken_semicolon_rows(records: List[Dict[str, Any]]) -> List[Dict
     return normalized
 
 
-async def extract_extracted_input(
-    file: UploadFile,
+def extract_extracted_input_from_bytes(
+    filename: Optional[str],
+    content_type: Optional[str],
+    contents: bytes,
     *,
     max_rows: Optional[int] = None,
     max_text_chars: Optional[int] = None,
 ) -> Tuple[str, Any]:
     """
+    Same as extract_extracted_input after raw bytes are read from the upload.
+
     Returns:
       (file_kind, extractedInputJson)
-    extractedInputJson:
-      - csv/xls/xlsx: list[dict]
-      - pdf/docx: { "text": string, "tables": ... }
-      - image: { "text": string }
     """
-    contents = await file.read()
-    filename = file.filename
-    file_kind = detect_file_kind(filename, file.content_type)
+    file_kind = detect_file_kind(filename, content_type)
 
     if file_kind in {"csv", "xls", "xlsx"}:
         if file_kind == "csv":
@@ -380,38 +397,28 @@ async def extract_extracted_input(
         return file_kind, {"text": text, "tables": tables}
 
     if file_kind in {"png", "jpg", "tiff"}:
-        from PIL import Image
-        from PIL import ImageOps
-        import pytesseract
-
-        image = Image.open(io.BytesIO(contents))
-        ocr_lang = (os.getenv("OCR_LANG") or "eng").strip() or "eng"
-        ocr_psm = (os.getenv("OCR_PSM") or "6").strip() or "6"
-        ocr_fallback_psm = (os.getenv("OCR_FALLBACK_PSM") or "11").strip() or "11"
-
-        if image.mode not in {"L", "RGB"}:
-            image = image.convert("RGB")
-
-        enhanced = ImageOps.autocontrast(image.convert("L"))
-        text = (pytesseract.image_to_string(enhanced, lang=ocr_lang, config=f"--psm {ocr_psm}") or "").strip()
-        if len(text) < 6:
-            second_pass = (
-                pytesseract.image_to_string(enhanced, lang=ocr_lang, config=f"--psm {ocr_fallback_psm}") or ""
-            ).strip()
-            if len(second_pass) > len(text):
-                text = second_pass
-
-        if not text:
-            raise ParseFileError(
-                code="OCR_NO_TEXT",
-                message="Image OCR failed to extract readable text. Try higher quality or clearer image.",
-            )
-
+        text = _extract_image_transcript(contents, file_kind)
         text = _truncate_text(_normalize_newlines(text), max_text_chars)
         return file_kind, {"text": text}
 
     raise ParseFileError(
         code="UNSUPPORTED_FILE_TYPE",
         message=f"Unsupported file type. Supported: {', '.join(SUPPORTED_FILE_KINDS)}",
+    )
+
+
+async def extract_extracted_input(
+    file: UploadFile,
+    *,
+    max_rows: Optional[int] = None,
+    max_text_chars: Optional[int] = None,
+) -> Tuple[str, Any]:
+    contents = await file.read()
+    return extract_extracted_input_from_bytes(
+        file.filename,
+        file.content_type,
+        contents,
+        max_rows=max_rows,
+        max_text_chars=max_text_chars,
     )
 

@@ -1,7 +1,5 @@
 import asyncio
 import io
-import sys
-import types
 import unittest
 from unittest import mock
 
@@ -60,17 +58,8 @@ class FileParsingTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "UNSUPPORTED_FILE_TYPE")
 
     def test_ocr_empty_result_raises_controlled_error(self) -> None:
-        upload = UploadFile(filename="img.png", file=io.BytesIO(b"fake"), headers={"content-type": "image/png"})
-
-        fake_image_obj = object()
-        fake_image_module = types.SimpleNamespace(open=lambda *_args, **_kwargs: types.SimpleNamespace(mode="RGB", convert=lambda *_a, **_k: fake_image_obj))
-        fake_image_ops = types.SimpleNamespace(autocontrast=lambda img: img)
-        fake_pytesseract = types.SimpleNamespace(image_to_string=lambda *_args, **_kwargs: "")
-
-        with mock.patch.dict(
-            sys.modules,
-            {"PIL": types.SimpleNamespace(Image=fake_image_module, ImageOps=fake_image_ops), "pytesseract": fake_pytesseract},
-        ):
+        upload = UploadFile(filename="img.png", file=io.BytesIO(b"x"), headers={"content-type": "image/png"})
+        with mock.patch("app.services.image_transcription.transcribe_image_with_gigachat", return_value=""):
             with self.assertRaises(ParseFileError) as ctx:
                 asyncio.run(extract_extracted_input(upload))
         self.assertEqual(ctx.exception.code, "OCR_NO_TEXT")

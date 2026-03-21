@@ -104,3 +104,13 @@ curl -X PATCH "http://localhost:8000/profile" \
   - `GenerationHistoryDetail`:
     - `id`, `created_at`, `main_file_name`
     - `generated_ts_code`: строка с TS-кодом
+
+---
+
+## GET /me/generations/{id}/check-input
+
+Описание:
+- Bearer: требуется
+- Ответ:
+  - `GenerationCheckInputResponse`:
+    - `input_base64`: строка base64 исходного загруженного файла или `null`, если запись старая, файл был больше лимита `GENERATION_HISTORY_MAX_INPUT_BYTES`, либо колонка не заполнена
