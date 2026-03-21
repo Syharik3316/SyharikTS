@@ -5,6 +5,8 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
+import urllib3
+from urllib3.exceptions import InsecureRequestWarning
 
 from app.utils.helpers import (
     extract_typescript_code,
@@ -66,6 +68,19 @@ def _build_aliases_for_schema(schema: Dict[str, Any]) -> Dict[str, List[str]]:
     return aliases
 
 
+def _collect_schema_keys(schema_obj: Any) -> set[str]:
+    schema = ensure_json_object(schema_obj)
+    keys: set[str] = set()
+    for k in schema.keys():
+        keys.add(str(k))
+    # input-wrapper schema also has nested object keys.
+    input_val = schema.get("input")
+    if isinstance(input_val, list) and input_val and isinstance(input_val[0], dict):
+        for k in input_val[0].keys():
+            keys.add(str(k))
+    return keys
+
+
 class LLMClient:
     def __init__(self) -> None:
         self.provider = (os.getenv("LLM_PROVIDER", "stub") or "stub").strip().lower()
@@ -80,7 +95,7 @@ class LLMClient:
         file_kind: str,
     ) -> str:
         def finalize_or_fallback(code: str) -> str:
-            if self._is_bad_generated_code(code, file_kind=file_kind):
+            if self._is_bad_generated_code(code, file_kind=file_kind, schema_obj=schema_obj):
                 return self._generate_stub_code(
                     extracted_input_json=extracted_input_json,
                     schema_obj=schema_obj,
@@ -101,7 +116,7 @@ class LLMClient:
             return finalize_or_fallback(self._generate_via_openai_compatible(prompt))
 
         if self.provider == "gigachat":
-            return finalize_or_fallback(self._generate_via_gigachat(prompt))
+            return finalize_or_fallback(self._generate_via_gigachat(prompt, file_kind=file_kind, schema_obj=schema_obj))
 
         raise ValueError(f"Unsupported LLM_PROVIDER: {self.provider}")
 
@@ -130,13 +145,14 @@ class LLMClient:
         # For null/objects/arrays we keep raw.
         return value
 
-    def _is_bad_generated_code(self, code: str, *, file_kind: str) -> bool:
+    def _is_bad_generated_code(self, code: str, *, file_kind: str, schema_obj: Any | None = None) -> bool:
         if not code or "export default function" not in code:
             return True
         if looks_like_incomplete_typescript(code):
             return True
 
         low = code.lower()
+        document_kinds = {"pdf", "docx", "txt", "md", "rtf", "odt", "xml", "epub", "fb2", "doc"}
 
         if "json.parse(base64file)" in low:
             return True
@@ -149,18 +165,45 @@ class LLMClient:
         if "\\p{l}" in low or "\\p{n}" in low:
             return True
 
-        if "const result: dealdata[] =" in low and "return result;" in low and "parsecsv" not in low:
-            return True
-
         # Require at least basic runtime csv flow.
         has_decode = "decodebase64" in low or "buffer.from(base64file" in low or "atob(" in low
         has_parse = "parsecsv" in low or "split(';')" in low or "separator" in low
         has_typed_return = "dealdata[]" in code
-        if not (has_decode and has_parse and has_typed_return):
-            return True
+        if file_kind in {"csv", "xls", "xlsx"}:
+            if not (has_decode and has_parse and has_typed_return):
+                return True
 
-        if file_kind in {"png", "jpg", "tiff"} and "transcript_b64" not in low:
-            return True
+        if file_kind in document_kinds:
+            # Doc formats should not regress into CSV parser templates.
+            if "parsecsv" in low or "split(';')" in low or "separator" in low:
+                return True
+            if "const csv = decodebase64(base64file)" in low:
+                return True
+            if "const result: record<string, unknown> = {}" in low and "return [result as dealdata]" in low:
+                return True
+
+        schema = ensure_json_object(schema_obj) if schema_obj is not None else {}
+        schema_has_nested = any(isinstance(v, (list, dict)) for v in schema.values())
+        if schema_has_nested:
+            if 'return string(value ?? "")' in low or "return string(value ?? '')" in low:
+                return True
+            if '"input": any[]' in low and '{ "input": "" }' in low:
+                return True
+            if '{"value":""}' in low or '{ "value": "" }' in low:
+                return True
+
+        if isinstance(schema.get("input"), list):
+            if "input:" not in low and '"input"' not in low:
+                return True
+
+        # Reject generated code that hardcodes known CRM keys absent in user schema.
+        if schema:
+            schema_keys = _collect_schema_keys(schema_obj)
+            known_keys = set(_CRM_HEADER_ALIASES.keys())
+            forbidden_keys = known_keys - schema_keys
+            for key in forbidden_keys:
+                if f'"{key}"' in code or f"'{key}'" in code:
+                    return True
 
         return False
 
@@ -170,122 +213,98 @@ class LLMClient:
         schema = ensure_json_object(schema_obj)
         schema_compact = json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
         aliases_compact = json.dumps(_build_aliases_for_schema(schema), ensure_ascii=False, separators=(",", ":"))
+        extracted_obj = ensure_json_object(extracted_input_json) if isinstance(extracted_input_json, dict) else {}
+        extracted_compact = json.dumps(extracted_obj, ensure_ascii=False, separators=(",", ":"))
 
-        if file_kind in {"png", "jpg", "tiff"}:
-            from app.services.image_transcription import transcript_utf8_base64_for_prompt
-
-            transcript = str(ensure_json_object(extracted_input_json).get("text") or "")
-            tb64 = transcript_utf8_base64_for_prompt(transcript)
+        if file_kind not in {"csv", "xls", "xlsx"}:
             return (
                 f"{interface_ts}\n\n"
                 "export default function (base64file: string): DealData[] {\n"
-                f'  const TRANSCRIPT_B64 = "{tb64}";\n'
                 "  if (base64file == null || !String(base64file).trim()) return [];\n"
                 f"  const schema: Record<string, unknown> = {schema_compact};\n"
                 f"  const aliases: Record<string, string[]> = {aliases_compact};\n"
-                "  const decodeBase64 = (input: string): string => {\n"
-                "    if (!input) return \"\";\n"
-                "    const raw = String(input).trim();\n"
-                "    const payload = raw.includes(\"base64,\") ? raw.slice(raw.indexOf(\"base64,\") + 7) : raw;\n"
-                "    let cleaned = payload.replace(/\\s+/g, \"\").replace(/-/g, \"+\").replace(/_/g, \"/\").replace(/[^A-Za-z0-9+/=]/g, \"\");\n"
-                "    const pad = cleaned.length % 4;\n"
-                "    if (pad > 0) cleaned += \"=\".repeat(4 - pad);\n"
-                "    let text = \"\";\n"
-                "    try {\n"
-                "      if (typeof Buffer !== \"undefined\") {\n"
-                "        text = Buffer.from(cleaned, \"base64\").toString(\"utf-8\");\n"
-                "      } else if (typeof atob !== \"undefined\") {\n"
-                "        const binary = atob(cleaned);\n"
-                "        const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));\n"
-                "        text = new TextDecoder(\"utf-8\", { fatal: false }).decode(bytes);\n"
-                "      }\n"
-                "    } catch {\n"
-                "      return \"\";\n"
-                "    }\n"
-                "    if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);\n"
-                "    return text;\n"
-                "  };\n"
-                "  const parseCsv = (text: string): string[][] => {\n"
-                "    const rows: string[][] = [];\n"
-                "    let row: string[] = [];\n"
-                "    let cell = \"\";\n"
-                "    let inQuotes = false;\n"
-                "    for (let i = 0; i < text.length; i++) {\n"
-                "      const ch = text[i];\n"
-                "      if (ch === '\"') {\n"
-                "        if (inQuotes && text[i + 1] === '\"') { cell += '\"'; i++; } else { inQuotes = !inQuotes; }\n"
-                "      } else if (ch === ';' && !inQuotes) {\n"
-                "        row.push(cell); cell = \"\";\n"
-                "      } else if ((ch === '\\n' || ch === '\\r') && !inQuotes) {\n"
-                "        if (ch === '\\r' && text[i + 1] === '\\n') i++;\n"
-                "        row.push(cell); cell = \"\";\n"
-                "        if (row.some((x) => x !== \"\")) rows.push(row);\n"
-                "        row = [];\n"
-                "      } else {\n"
-                "        cell += ch;\n"
+                f"  const extracted = {extracted_compact} as Record<string, unknown>;\n"
+                "  const records = Array.isArray(extracted.records) ? extracted.records : [];\n"
+                "  const text = String(extracted.text ?? \"\");\n"
+                "  const norm = (s: unknown): string => String(s ?? \"\").toLowerCase().replace(/[^a-z0-9а-яё]+/gi, \"\");\n"
+                "  const pick = (row: Record<string, unknown>, key: string): unknown => {\n"
+                "    const candidates = [key, ...(aliases[key] ?? [])];\n"
+                "    for (const c of candidates) {\n"
+                "      const want = norm(c);\n"
+                "      const shortKey = want.length <= 8;\n"
+                "      for (const [rk, rv] of Object.entries(row || {})) {\n"
+                "        const got = norm(rk);\n"
+                "        if (got === want) return rv;\n"
+                "        if (!shortKey && (got.includes(want) || want.includes(got))) return rv;\n"
                 "      }\n"
                 "    }\n"
-                "    row.push(cell);\n"
-                "    if (row.some((x) => x !== \"\")) rows.push(row);\n"
-                "    return rows;\n"
+                "    return row[key];\n"
                 "  };\n"
-                "  const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9а-яё]+/gi, \"\");\n"
-                "  const toNumber = (s: string): number => {\n"
-                "    const n = Number(String(s || \"\").trim().replace(/\\s+/g, \"\").replace(\",\", \".\"));\n"
+                "  const toNum = (v: unknown): number => {\n"
+                "    const n = Number(String(v ?? \"\").trim().replace(/\\s+/g, \"\").replace(\",\", \".\"));\n"
                 "    return Number.isFinite(n) ? n : 0;\n"
                 "  };\n"
-                "  const toBoolean = (s: string): boolean => [\"1\",\"true\",\"yes\",\"y\",\"да\"].includes(String(s || \"\").trim().toLowerCase());\n"
-                "  const cast = (value: string, example: unknown): unknown => {\n"
-                "    if (typeof example === \"number\") return toNumber(value);\n"
-                "    if (typeof example === \"boolean\") return toBoolean(value);\n"
-                "    if (example === null) {\n"
-                "      const t = String(value || \"\").trim();\n"
-                "      return t === \"\" ? null : t;\n"
+                "  const toBool = (v: unknown): boolean => [\"1\",\"true\",\"yes\",\"y\",\"да\"].includes(String(v ?? \"\").trim().toLowerCase());\n"
+                "  const dflt = (ex: unknown): unknown => {\n"
+                "    if (Array.isArray(ex)) return [];\n"
+                "    if (ex === null) return null;\n"
+                "    if (typeof ex === \"number\") return 0;\n"
+                "    if (typeof ex === \"boolean\") return false;\n"
+                "    if (typeof ex === \"string\") return \"\";\n"
+                "    if (ex && typeof ex === \"object\") {\n"
+                "      const o: Record<string, unknown> = {};\n"
+                "      for (const [k, v] of Object.entries(ex as Record<string, unknown>)) o[k] = dflt(v);\n"
+                "      return o;\n"
                 "    }\n"
-                "    return String(value ?? \"\");\n"
+                "    return \"\";\n"
                 "  };\n"
-                "  const csv = decodeBase64(TRANSCRIPT_B64);\n"
-                "  const table = parseCsv(csv);\n"
-                "  const keys = Object.keys(schema);\n"
-                "  if (!table.length || table.length === 1) {\n"
-                "    const obj: Record<string, unknown> = {};\n"
-                "    for (const key of keys) {\n"
-                "      const ex = schema[key];\n"
-                "      if (key === \"text\" || key === \"value\") obj[key] = csv;\n"
-                "      else if (typeof ex === \"number\") obj[key] = 0;\n"
-                "      else if (typeof ex === \"boolean\") obj[key] = false;\n"
-                "      else if (ex === null) obj[key] = null;\n"
-                "      else obj[key] = \"\";\n"
+                "  const cast = (v: unknown, ex: unknown): unknown => {\n"
+                "    if (Array.isArray(ex)) {\n"
+                "      const itemEx = ex.length ? ex[0] : \"\";\n"
+                "      return Array.isArray(v) ? v.map((x) => cast(x, itemEx)) : [];\n"
                 "    }\n"
-                "    return [obj as DealData];\n"
-                "  }\n"
-                "  const headers = table[0].map((h) => String(h ?? \"\").trim());\n"
-                "  const idxByHeader = new Map<string, number>();\n"
-                "  headers.forEach((h, i) => idxByHeader.set(norm(h), i));\n"
-                "  const result: DealData[] = [];\n"
-                "  for (let r = 1; r < table.length; r++) {\n"
-                "    const line = table[r];\n"
-                "    const obj: Record<string, unknown> = {};\n"
-                "    for (const key of keys) {\n"
-                "      const names = [key, ...(aliases[key] ?? [])];\n"
-                "      let idx: number | undefined = undefined;\n"
-                "      for (const name of names) {\n"
-                "        const found = idxByHeader.get(norm(name));\n"
-                "        if (found !== undefined) { idx = found; break; }\n"
+                "    if (ex === null) { const t = String(v ?? \"\").trim(); return t ? String(v) : null; }\n"
+                "    if (typeof ex === \"number\") return toNum(v);\n"
+                "    if (typeof ex === \"boolean\") return toBool(v);\n"
+                "    if (typeof ex === \"string\") return String(v ?? \"\");\n"
+                "    if (ex && typeof ex === \"object\") {\n"
+                "      const src = (v && typeof v === \"object\") ? (v as Record<string, unknown>) : {};\n"
+                "      const o: Record<string, unknown> = {};\n"
+                "      for (const [k, sub] of Object.entries(ex as Record<string, unknown>)) o[k] = cast(src[k], sub);\n"
+                "      return o;\n"
+                "    }\n"
+                "    return v;\n"
+                "  };\n"
+                "  if (Array.isArray((schema as Record<string, unknown>).input)) {\n"
+                "    const itemEx = (((schema as Record<string, unknown>).input as unknown[]) || [])[0] ?? {};\n"
+                "    const mapped = records.map((r) => {\n"
+                "      const src = (r && typeof r === \"object\") ? (r as Record<string, unknown>) : {};\n"
+                "      const aligned: Record<string, unknown> = {};\n"
+                "      for (const k of Object.keys((itemEx && typeof itemEx === \"object\") ? (itemEx as Record<string, unknown>) : {})) {\n"
+                "        aligned[k] = pick(src, k);\n"
                 "      }\n"
-                "      const raw = idx === undefined ? \"\" : String(line[idx] ?? \"\");\n"
-                "      if (key === \"dealStageFinal\") {\n"
-                "        const stageIdx = idxByHeader.get(norm(\"Стадия (Сделка)\"));\n"
-                "        const stageRaw = stageIdx === undefined ? \"\" : String(line[stageIdx] ?? \"\");\n"
-                "        const st = stageRaw.trim().toLowerCase();\n"
-                "        obj[key] = st === \"закрыта\" || st === \"отклонена\";\n"
-                "      } else {\n"
-                "        obj[key] = cast(raw, schema[key]);\n"
+                "      return cast(aligned, itemEx);\n"
+                "    });\n"
+                "    const out = (dflt(schema) as Record<string, unknown>);\n"
+                "    out.input = mapped;\n"
+                "    return [out as DealData];\n"
+                "  }\n"
+                "  const out = (dflt(schema) as Record<string, unknown>);\n"
+                "  const row0 = records[0] ?? {};\n"
+                "  const alignedRow0: Record<string, unknown> = {};\n"
+                "  for (const k of Object.keys(schema)) alignedRow0[k] = pick((row0 && typeof row0 === \"object\") ? (row0 as Record<string, unknown>) : {}, k);\n"
+                "  const mapped = cast(alignedRow0, schema) as Record<string, unknown>;\n"
+                "  for (const [k, v] of Object.entries(mapped)) out[k] = v;\n"
+                "  if (!records.length && text) {\n"
+                "    for (const key of Object.keys(out)) {\n"
+                "      if (typeof out[key] === \"string\" && !String(out[key] || \"\").trim()) {\n"
+                "        const r = new RegExp(`${key}\\\\s*[:\\\\-]\\\\s*([^\\\\n;]+)`, \"i\");\n"
+                "        const m = text.match(r);\n"
+                "        if (m) out[key] = m[1].trim();\n"
                 "      }\n"
                 "    }\n"
-                "    result.push(obj as DealData);\n"
                 "  }\n"
-                "  return result;\n"
+                "  return [out as DealData];\n"
                 "}\n"
             )
 
@@ -411,7 +430,7 @@ class LLMClient:
         msg = llm.invoke([HumanMessage(content=prompt)])
         return extract_typescript_code(msg.content or "")
 
-    def _generate_via_gigachat(self, prompt: str) -> str:
+    def _generate_via_gigachat(self, prompt: str, *, file_kind: str, schema_obj: Any) -> str:
         """
         GigaChat via Authorization key (OAuth) + REST chat completions.
 
@@ -427,17 +446,14 @@ class LLMClient:
         Управляется через env `GIGACHAT_VERIFY_TLS` (по умолчанию `false`).
         """
 
-        auth_key = (os.getenv("GIGACHAT_AUTHORIZATION_KEY") or "").strip()
-        if not auth_key:
-            raise ValueError("For gigachat set GIGACHAT_AUTHORIZATION_KEY.")
-
         base_url = (os.getenv("GIGACHAT_BASE_URL") or "https://gigachat.devices.sberbank.ru/api/v1").strip().rstrip("/")
         model = (os.getenv("GIGACHAT_MODEL") or "").strip() or "GigaChat-2-Max"
 
         verify_tls_env = (os.getenv("GIGACHAT_VERIFY_TLS") or "false").strip().lower()
         verify_tls = verify_tls_env in {"1", "true", "yes", "y", "on"}
+        self._maybe_disable_insecure_tls_warning(verify_tls)
 
-        token, _expires_at = self._get_gigachat_access_token(auth_key=auth_key, verify_tls=verify_tls)
+        auth_header = self._resolve_gigachat_authorization_header(verify_tls=verify_tls)
 
         chat_url = f"{base_url}/chat/completions"
         raw_max_tokens = (os.getenv("GIGACHAT_MAX_TOKENS") or "").strip()
@@ -458,7 +474,7 @@ class LLMClient:
         headers = {
             "Accept": "application/json",
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {token}",
+            "Authorization": auth_header,
         }
 
         resp = requests.post(chat_url, headers=headers, json=payload, timeout=timeout_sec, verify=verify_tls)
@@ -485,19 +501,40 @@ class LLMClient:
             raise RuntimeError("GigaChat returned empty content")
         code = extract_typescript_code(content)
 
-        # Retry several times with stronger instruction if output seems truncated.
+        # Retry several times with escalating instructions when output is truncated or invalid.
         retry_attempts = int((os.getenv("GIGACHAT_RETRY_ATTEMPTS") or "3").strip() or "3")
         attempt = 0
-        while looks_like_incomplete_typescript(code) and attempt < retry_attempts:
+        while attempt < retry_attempts and (
+            looks_like_incomplete_typescript(code)
+            or self._is_bad_generated_code(code, file_kind=file_kind, schema_obj=schema_obj)
+        ):
             attempt += 1
+            if attempt == 1:
+                correction = (
+                    "Previous output was invalid. Keep function signature and regenerate complete deterministic TypeScript."
+                )
+            elif attempt == 2:
+                correction = (
+                    "Previous output still invalid. Strict requirements: preserve schema shape exactly, especially nested arrays/objects. "
+                    "Never flatten to scalar strings."
+                )
+            else:
+                correction = (
+                    "Previous output rejected again. Return FULL TypeScript from start to end with strict schema-shape preservation. "
+                    "No markdown, no explanations, no placeholders."
+                )
             retry_payload = {
                 "model": model,
                 "messages": [
                     {
                         "role": "user",
                         "content": (
-                            "Previous output was truncated. Return FULL TypeScript code from start to end. "
-                            "No markdown, no explanation.\n" + prompt
+                            (
+                                f"{correction} "
+                                "If this is a document format (pdf/docx/txt/rtf/etc), do NOT generate CSV parsing logic "
+                                "(no parseCsv, no split(';'), no separator-based parser).\n"
+                            )
+                            + prompt
                         ),
                     }
                 ],
@@ -525,7 +562,9 @@ class LLMClient:
                         retry_content = ((choices[0] or {}).get("message") or {}).get("content") or ""
                 if retry_content:
                     code_retry = extract_typescript_code(retry_content)
-                    if code_retry and not looks_like_incomplete_typescript(code_retry):
+                    if code_retry and not looks_like_incomplete_typescript(code_retry) and not self._is_bad_generated_code(
+                        code_retry, file_kind=file_kind, schema_obj=schema_obj
+                    ):
                         return code_retry
                     code = code_retry or code
 
@@ -538,20 +577,17 @@ class LLMClient:
           2) вызов /chat/completions с attachments=[file_id] и function_call="auto"
         """
 
-        auth_key = (os.getenv("GIGACHAT_AUTHORIZATION_KEY") or "").strip()
-        if not auth_key:
-            raise ValueError("For gigachat image transcription set GIGACHAT_AUTHORIZATION_KEY.")
-
         base_url = (os.getenv("GIGACHAT_BASE_URL") or "https://gigachat.devices.sberbank.ru/api/v1").strip().rstrip("/")
         model = (os.getenv("GIGACHAT_MODEL") or "").strip() or "GigaChat-2-Max"
 
         verify_tls_env = (os.getenv("GIGACHAT_VERIFY_TLS") or "false").strip().lower()
         verify_tls = verify_tls_env in {"1", "true", "yes", "y", "on"}
+        self._maybe_disable_insecure_tls_warning(verify_tls)
 
-        token, _expires_at = self._get_gigachat_access_token(auth_key=auth_key, verify_tls=verify_tls)
+        auth_header = self._resolve_gigachat_authorization_header(verify_tls=verify_tls)
         headers = {
             "Accept": "application/json",
-            "Authorization": f"Bearer {token}",
+            "Authorization": auth_header,
         }
 
         mime_name = {
@@ -647,6 +683,30 @@ class LLMClient:
         return content_out
 
     _gigachat_token_cache: Optional[Tuple[str, float]] = None
+
+    def _maybe_disable_insecure_tls_warning(self, verify_tls: bool) -> None:
+        if not verify_tls:
+            urllib3.disable_warnings(InsecureRequestWarning)
+
+    def _resolve_gigachat_authorization_header(self, *, verify_tls: bool) -> str:
+        api_key = (os.getenv("GIGACHAT_API_KEY") or "").strip()
+        if api_key:
+            token = api_key[7:].strip() if api_key.lower().startswith("bearer ") else api_key
+            return f"Bearer {token}"
+
+        auth_key = (os.getenv("GIGACHAT_AUTHORIZATION_KEY") or "").strip()
+        if auth_key.lower().startswith("bearer "):
+            token = auth_key[7:].strip()
+            return f"Bearer {token}"
+
+        if not auth_key:
+            raise ValueError(
+                "For gigachat set either GIGACHAT_API_KEY, "
+                "GIGACHAT_AUTHORIZATION_KEY='Bearer <token>' or OAuth key in GIGACHAT_AUTHORIZATION_KEY."
+            )
+
+        token, _expires_at = self._get_gigachat_access_token(auth_key=auth_key, verify_tls=verify_tls)
+        return f"Bearer {token}"
 
     def _get_gigachat_access_token(self, *, auth_key: str, verify_tls: bool) -> Tuple[str, float]:
         """

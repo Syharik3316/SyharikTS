@@ -138,10 +138,7 @@ export default function Register() {
       } catch {
         /* ignore */
       }
-      navigate('/login', {
-        replace: true,
-        state: { fromRegister: true, email: email.trim() },
-      });
+      navigate('/verify-email', { replace: true });
     } catch (err) {
       setFormError(err instanceof Error ? err.message : String(err));
     } finally {

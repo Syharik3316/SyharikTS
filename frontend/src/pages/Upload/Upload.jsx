@@ -60,7 +60,14 @@ function pickSingleAllowedFile(fileList) {
 }
 
 function formatSupportedFormatsShort() {
-  return 'CSV, XLS, XLSX, PDF, DOCX, DOC, TXT, MD, RTF, ODT, XML, EPUB, FB2';
+  return 'CSV, XLS, XLSX, PDF, DOCX, DOC, PNG, JPG, JPEG, TIFF, TXT, MD, RTF, ODT, XML, EPUB, FB2';
+}
+
+function formatFileSize(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
 export default function Upload() {
@@ -78,12 +85,14 @@ export default function Upload() {
   const [backendError, setBackendError] = useState('');
   const [inferLoading, setInferLoading] = useState(false);
   const [inferError, setInferError] = useState('');
+  const [jsonImportError, setJsonImportError] = useState('');
   const [tsCopied, setTsCopied] = useState(false);
   const [checkInputBase64, setCheckInputBase64] = useState(null);
   const [checkInputLoading, setCheckInputLoading] = useState(false);
   const [checkInputError, setCheckInputError] = useState('');
   const [checkInputFileLabel, setCheckInputFileLabel] = useState('');
   const fileInputRef = useRef(null);
+  const jsonImportInputRef = useRef(null);
   const shrinkTimerRef = useRef(null);
 
   const splitLayout = viewState === 'shrinking' || viewState === 'split';
@@ -157,6 +166,32 @@ export default function Upload() {
   const handleFileInputChange = (e) => {
     addFiles(e.target.files);
     e.target.value = '';
+  };
+
+  const removeFile = (targetFile) => {
+    setFiles((prev) =>
+      prev.filter(
+        (f) =>
+          !(
+            f.name === targetFile.name &&
+            f.size === targetFile.size &&
+            f.lastModified === targetFile.lastModified
+          ),
+      ),
+    );
+  };
+
+  const handleJsonImport = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setJsonImportError('');
+    try {
+      const text = await file.text();
+      setNoteText(text);
+    } catch {
+      setJsonImportError('Не удалось прочитать .json файл.');
+    }
   };
 
   const handleModeChange = (next) => {
@@ -424,7 +459,9 @@ export default function Upload() {
                   disabled={generationBusy}
                 />
                 <label
-                  className={`${styles.dropZone} ${generationBusy ? styles.dropZoneDisabled : ''}`}
+                  className={`${styles.dropZone} ${
+                    files.length > 0 ? styles.dropZoneWithFile : ''
+                  } ${generationBusy ? styles.dropZoneDisabled : ''}`}
                   htmlFor="upload-files-input"
                   tabIndex={generationBusy ? -1 : 0}
                   onKeyDown={(e) => {
@@ -442,13 +479,32 @@ export default function Upload() {
                   <span className={styles.dropFormats}>
                     Поддерживаются: {formatSupportedFormatsShort()}
                   </span>
+
+                  {files.length > 0 ? (
+                    <span className={styles.fileReadyBadge} role="status" aria-live="polite">
+                      Готово: файл загружен
+                    </span>
+                  ) : null}
                 </label>
 
                 {files.length > 0 ? (
                   <ul className={styles.fileList} aria-label="Выбранный файл">
                     {files.map((f) => (
                       <li key={`${f.name}-${f.size}-${f.lastModified}`} className={styles.fileItem}>
-                        {f.name}
+                        <div className={styles.fileMeta}>
+                          <span className={styles.fileName}>{f.name}</span>
+                          <span className={styles.fileSize}>{formatFileSize(f.size)}</span>
+                        </div>
+                        <button
+                          type="button"
+                          className={styles.fileRemoveBtn}
+                          onClick={() => removeFile(f)}
+                          disabled={generationBusy}
+                          aria-label={`Удалить файл ${f.name}`}
+                          title="Удалить файл"
+                        >
+                          Удалить
+                        </button>
                       </li>
                     ))}
                   </ul>
@@ -470,6 +526,24 @@ export default function Upload() {
                 <label className={styles.noteLabel} htmlFor="upload-note-text">
                   Пример JSON структуры выхода
                 </label>
+                <div className={styles.noteTools}>
+                  <button
+                    type="button"
+                    className={styles.actionBtn}
+                    onClick={() => jsonImportInputRef.current?.click()}
+                    disabled={inferLoading || backendLoading}
+                  >
+                    Импорт
+                  </button>
+                  <input
+                    ref={jsonImportInputRef}
+                    className={styles.hiddenFileInput}
+                    type="file"
+                    accept=".json,application/json,text/json"
+                    onChange={handleJsonImport}
+                    aria-label="Импорт JSON в поле примера"
+                  />
+                </div>
                 <div className={styles.noteRow}>
                   <textarea
                     id="upload-note-text"
@@ -483,6 +557,11 @@ export default function Upload() {
                 {inferError ? (
                   <p className={styles.inlineError} role="alert">
                     {inferError}
+                  </p>
+                ) : null}
+                {jsonImportError ? (
+                  <p className={styles.inlineError} role="alert">
+                    {jsonImportError}
                   </p>
                 ) : null}
                 <div className={styles.uploadActions}>

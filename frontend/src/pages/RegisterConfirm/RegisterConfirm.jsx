@@ -70,6 +70,10 @@ export default function RegisterConfirm() {
       } catch {
         /* ignore */
       }
+      navigate('/login', {
+        replace: true,
+        state: { fromRegister: true, email: pendingEmail },
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

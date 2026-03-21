@@ -82,11 +82,23 @@ def infer_schema_from_extracted(file_kind: str, extracted_input_json: Any) -> Di
     """
     Deterministic schema inference for MVP with minimal/no LLM tokens.
     """
-    if file_kind in {"csv", "xls", "xlsx"}:
-        if not isinstance(extracted_input_json, list) or not extracted_input_json:
+    if isinstance(extracted_input_json, dict):
+        if "records" in extracted_input_json and isinstance(extracted_input_json.get("records"), list):
+            extracted_records = extracted_input_json.get("records") or []
+        else:
+            extracted_records = []
+        extracted_text = str(extracted_input_json.get("text") or "")
+    else:
+        extracted_records = extracted_input_json if isinstance(extracted_input_json, list) else []
+        extracted_text = ""
+
+    if file_kind in {"csv", "xls", "xlsx", "pdf", "docx", "png", "jpg", "tiff", "txt", "md", "rtf", "odt", "xml", "epub", "fb2", "doc"}:
+        if not extracted_records:
+            if extracted_text:
+                return {"text": "string", "value": "string"}
             return {"value": "string"}
 
-        first = extracted_input_json[0]
+        first = extracted_records[0]
         if not isinstance(first, dict) or not first:
             return {"value": "string"}
 
@@ -94,10 +106,6 @@ def infer_schema_from_extracted(file_kind: str, extracted_input_json: Any) -> Di
         for k, v in first.items():
             schema[str(k)] = _normalize_primitive_value(v, str(k))
         return schema
-
-    if file_kind in {"pdf", "docx", "png", "jpg", "tiff", "txt", "md", "rtf", "odt", "xml", "epub", "fb2", "doc"}:
-        # For free text formats return only generic shape placeholders.
-        return {"text": "string", "value": "string"}
 
     # Unknown
     return {"value": "string"}

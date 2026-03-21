@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+from typing import Any
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,6 +36,42 @@ def _read_generation_history_max_input_bytes() -> int:
         return val if val > 0 else 8 * 1024 * 1024
     except ValueError:
         return 8 * 1024 * 1024
+
+
+def _coerce_schema_to_dict(schema_obj: Any) -> dict[str, Any] | None:
+    if isinstance(schema_obj, dict):
+        return schema_obj
+    if isinstance(schema_obj, list) and schema_obj and isinstance(schema_obj[0], dict):
+        return schema_obj[0]
+    return None
+
+
+def _validate_generated_code_shape(*, code: str, schema_obj: Any, file_kind: str) -> None:
+    schema_dict = _coerce_schema_to_dict(schema_obj)
+    if schema_dict is None:
+        # Invalid schemas are rejected earlier; shape gate should stay non-fatal.
+        return
+
+    low = code.lower()
+    if "export default function" not in code:
+        raise ValueError("generated code missing default export function")
+
+    if file_kind in {"pdf", "docx", "txt", "md", "rtf", "odt", "xml", "epub", "fb2", "doc"}:
+        if "parsecsv" in low or "split(';')" in low:
+            raise ValueError("document format code incorrectly contains CSV-only parser")
+
+    schema_has_nested = any(isinstance(v, (list, dict)) for v in schema_dict.values())
+    if schema_has_nested:
+        if 'return string(value ?? "")' in low or "return string(value ?? '')" in low:
+            raise ValueError("generated code flattens nested schema values to strings")
+
+    if isinstance(schema_dict.get("input"), list):
+        if '"input"' not in code and "input:" not in code:
+            raise ValueError("generated code does not preserve required top-level input field")
+        if '{"input":""}' in low or '{ "input": "" }' in low:
+            raise ValueError("generated code degraded input array into empty string")
+        if '{"value":""}' in low or '{ "value": "" }' in low:
+            raise ValueError("generated code degraded required input-wrapper into scalar value output")
 
 
 @router.post("/generate", response_model=GenerateResponse)
@@ -84,10 +121,8 @@ async def generate(
 
     try:
         client = LLMClient()
-        # Hybrid path: tabular + raster images use deterministic stub (CSV from base64 or
-        # transcript embedded as base64). LLM codegen for images ignored the transcript and
-        # decoded base64file as UTF-8 garbage — stub always parses server-side OCR text.
-        if file_kind in {"csv", "xls", "xlsx", "png", "jpg", "tiff"}:
+        # Tabular uploads keep deterministic stub path.
+        if file_kind in {"csv", "xls", "xlsx"}:
             prev_provider = client.provider
             client.provider = "stub"
             try:
@@ -114,9 +149,10 @@ async def generate(
     if not code or not code.strip():
         raise HTTPException(status_code=500, detail="LLM returned empty code")
 
-    # Basic sanity check: the signature must exist.
-    if "export default function" not in code:
-        raise HTTPException(status_code=500, detail="Generated code missing export default function")
+    try:
+        _validate_generated_code_shape(code=code, schema_obj=schema_obj, file_kind=file_kind)
+    except ValueError as e:
+        raise HTTPException(status_code=500, detail=f"Generated code rejected by shape gate: {e}")
 
     max_store = _read_generation_history_max_input_bytes()
     input_b64 = base64.b64encode(contents).decode("ascii") if len(contents) <= max_store else None

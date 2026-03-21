@@ -39,6 +39,33 @@ class ParseFileError(ValueError):
         return {"code": self.code, "message": self.message}
 
 
+def _unified_extracted_payload(
+    *,
+    file_kind: str,
+    text: str = "",
+    tables: Optional[List[Any]] = None,
+    records: Optional[List[Dict[str, Any]]] = None,
+    warnings: Optional[List[str]] = None,
+    extra_metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    metadata: Dict[str, Any] = {
+        "kind": file_kind,
+        "warnings": warnings or [],
+        "has_text": bool((text or "").strip()),
+        "records_count": len(records or []),
+        "tables_count": len(tables or []),
+    }
+    if extra_metadata:
+        metadata.update(extra_metadata)
+    return {
+        "kind": file_kind,
+        "text": text or "",
+        "tables": tables or [],
+        "records": records or [],
+        "metadata": metadata,
+    }
+
+
 def detect_file_kind(filename: Optional[str], content_type: Optional[str]) -> str:
     name = (filename or "").lower()
     ctype = (content_type or "").lower()
@@ -166,29 +193,22 @@ def _truncate_text(text: str, max_text_chars: Optional[int]) -> str:
 
 
 def _extract_image_transcript(contents: bytes, file_kind: str) -> str:
-    from app.services.image_transcription import transcribe_image_with_gigachat
+    from app.services.image_transcription import transcribe_image_with_ocr
 
     try:
-        text = transcribe_image_with_gigachat(contents, file_kind).strip()
+        text = transcribe_image_with_ocr(contents, file_kind).strip()
     except ValueError as e:
         raise ParseFileError(code="OCR_NO_TEXT", message=str(e)) from e
     except Exception as e:
-        msg = str(e)
-        up = msg.upper()
-        if "GIGACHAT_RATE_LIMIT" in up or "429" in up or "TOO MANY REQUESTS" in up:
-            raise ParseFileError(
-                code="GIGACHAT_RATE_LIMIT",
-                message="GigaChat временно ограничил запросы (429). Подождите 30-60 секунд и повторите попытку.",
-            ) from e
-        raise
+        raise ParseFileError(
+            code="OCR_FAILED",
+            message=f"Не удалось выполнить OCR для изображения: {e}",
+        ) from e
 
     if not text:
         raise ParseFileError(
             code="OCR_NO_TEXT",
-            message=(
-                "GigaChat не вернул текст с изображения. Проверьте GIGACHAT_AUTHORIZATION_KEY, "
-                "модель с поддержкой изображений (GigaChat-2-Pro/Max), лимиты API и качество снимка."
-            ),
+            message="OCR не вернул текст с изображения. Проверьте качество снимка, язык OCR и контрастность.",
         )
     return text
 
@@ -295,6 +315,146 @@ def _normalize_broken_semicolon_rows(records: List[Dict[str, Any]]) -> List[Dict
     return normalized
 
 
+def _records_from_text_key_value(text: str, *, max_rows: Optional[int]) -> List[Dict[str, Any]]:
+    pairs: Dict[str, str] = {}
+    for raw_line in _normalize_newlines(text).split("\n"):
+        line = (raw_line or "").strip()
+        if not line:
+            continue
+        m = re.match(r"^([^:;]{2,120})\s*[:\-]\s*(.+)$", line)
+        if not m:
+            continue
+        key = m.group(1).strip()
+        value = m.group(2).strip()
+        if key and value:
+            pairs[key] = value
+    if not pairs:
+        return []
+    records = [pairs]
+    return _limit_records(records, max_rows) if max_rows is not None else records
+
+
+def _records_from_ocr_text(text: str, *, max_rows: Optional[int]) -> List[Dict[str, Any]]:
+    # 1) Try strict key:value parsing first.
+    kv_records = _records_from_text_key_value(text, max_rows=max_rows)
+    if kv_records:
+        return kv_records
+
+    lines = [ln.strip() for ln in _normalize_newlines(text).split("\n") if ln and ln.strip()]
+    if not lines:
+        return []
+
+    # 2) Try question + options block often seen in screenshots/forms.
+    q_re = re.compile(r"^\d+[.)]\s*(.+)$")
+    opt_re = re.compile(r"^[A-Za-zА-Яа-яЁё0-9][.)]?\s+(.+)$")
+    records: List[Dict[str, Any]] = []
+    current_question = ""
+    current_options: List[str] = []
+
+    def flush() -> None:
+        nonlocal current_question, current_options
+        if current_question:
+            item: Dict[str, Any] = {"question": current_question}
+            if current_options:
+                item["options"] = " | ".join(current_options)
+            records.append(item)
+        current_question = ""
+        current_options = []
+
+    for ln in lines:
+        q_m = q_re.match(ln)
+        if q_m:
+            flush()
+            current_question = q_m.group(1).strip()
+            continue
+        o_m = opt_re.match(ln)
+        if o_m and current_question:
+            current_options.append(o_m.group(1).strip())
+            continue
+        if current_question:
+            current_question = f"{current_question} {ln}".strip()
+
+    flush()
+    if records:
+        return _limit_records(records, max_rows) if max_rows is not None else records
+
+    # 3) Last resort: keep first lines as one record, so infer-schema has fields.
+    text_preview = " ".join(lines[:6]).strip()
+    fallback = [{"content": text_preview}] if text_preview else []
+    return _limit_records(fallback, max_rows) if max_rows is not None else fallback
+
+
+def _records_from_doc_tables(tables: List[Dict[str, Any]], *, max_rows: Optional[int]) -> List[Dict[str, Any]]:
+    def _norm(s: Any) -> str:
+        return re.sub(r"\s+", " ", str(s or "").strip().lower())
+
+    def _merge_value(prev: str, nxt: str) -> str:
+        p = (prev or "").strip()
+        n = (nxt or "").strip()
+        if not p:
+            return n
+        if not n:
+            return p
+        if n in p:
+            return p
+        return f"{p}\n{n}"
+
+    def _extract_kv_from_raw(raw_rows: List[Any]) -> Dict[str, str]:
+        kv: Dict[str, str] = {}
+        current_key = ""
+        for row in raw_rows:
+            if not isinstance(row, list):
+                continue
+            cells = [str(c or "").strip() for c in row]
+            if not any(cells):
+                continue
+
+            left = cells[0] if len(cells) >= 1 else ""
+            right = cells[1] if len(cells) >= 2 else ""
+
+            if left and right:
+                current_key = left
+                kv[current_key] = _merge_value(kv.get(current_key, ""), right)
+                continue
+
+            if not left and right and current_key:
+                kv[current_key] = _merge_value(kv.get(current_key, ""), right)
+                continue
+
+            # Single non-empty cell rows can be useful continuations for current key.
+            if current_key and len([c for c in cells if c]) == 1:
+                val = next((c for c in cells if c), "")
+                kv[current_key] = _merge_value(kv.get(current_key, ""), val)
+        return kv
+
+    def _is_meaningful_row_dict(row: Dict[str, Any]) -> bool:
+        if not row:
+            return False
+        keys = [str(k or "").strip() for k in row.keys() if str(k or "").strip()]
+        unique_keys = {_norm(k) for k in keys if _norm(k)}
+        non_empty_values = [str(v or "").strip() for v in row.values() if str(v or "").strip()]
+        # Skip noisy single-header pseudo-rows from DOCX where each row repeats same long key.
+        if len(unique_keys) <= 1 and len(non_empty_values) <= 1:
+            return False
+        return True
+
+    out: List[Dict[str, Any]] = []
+    for table in tables:
+        rows = table.get("rows") if isinstance(table, dict) else None
+        if isinstance(rows, list):
+            for r in rows:
+                if isinstance(r, dict) and _is_meaningful_row_dict(r):
+                    out.append({str(k): str(v) for k, v in r.items()})
+        raw = table.get("raw") if isinstance(table, dict) else None
+        if isinstance(raw, list):
+            kv = _extract_kv_from_raw(raw)
+            if kv:
+                out.append(kv)
+    if not out:
+        return []
+    return _limit_records(out, max_rows) if max_rows is not None else out
+
+
 def extract_extracted_input_from_bytes(
     filename: Optional[str],
     content_type: Optional[str],
@@ -323,47 +483,51 @@ def extract_extracted_input_from_bytes(
 
         records = _to_records_dataframe(df, max_rows=max_rows)
         records = _normalize_broken_semicolon_rows(records)
-        return file_kind, records
+        return file_kind, _unified_extracted_payload(file_kind=file_kind, records=records)
 
     if file_kind in {"txt", "md"}:
         text = _normalize_newlines(_decode_text_contents(contents))
         text = _truncate_text(text, max_text_chars)
-        return file_kind, {"text": text}
+        return file_kind, _unified_extracted_payload(file_kind=file_kind, text=text)
 
     if file_kind == "rtf":
         text = _normalize_newlines(_extract_rtf_text(contents))
         text = _truncate_text(text, max_text_chars)
         if not text.strip():
             raise ParseFileError(code="TEXT_DECODE_FAILED", message="Failed to extract text from RTF file.")
-        return file_kind, {"text": text}
+        return file_kind, _unified_extracted_payload(file_kind=file_kind, text=text)
 
     if file_kind == "odt":
         text = _normalize_newlines(_extract_odt_text(contents))
         text = _truncate_text(text, max_text_chars)
         if not text.strip():
             raise ParseFileError(code="TEXT_DECODE_FAILED", message="Failed to extract text from ODT file.")
-        return file_kind, {"text": text}
+        return file_kind, _unified_extracted_payload(file_kind=file_kind, text=text)
 
     if file_kind in {"xml", "fb2"}:
         text = _normalize_newlines(_extract_xml_text(contents))
         text = _truncate_text(text, max_text_chars)
         if not text.strip():
             raise ParseFileError(code="TEXT_DECODE_FAILED", message=f"Failed to extract text from {file_kind.upper()} file.")
-        return file_kind, {"text": text}
+        return file_kind, _unified_extracted_payload(file_kind=file_kind, text=text)
 
     if file_kind == "epub":
         text = _normalize_newlines(_extract_epub_text(contents))
         text = _truncate_text(text, max_text_chars)
         if not text.strip():
             raise ParseFileError(code="TEXT_DECODE_FAILED", message="Failed to extract text from EPUB file.")
-        return file_kind, {"text": text}
+        return file_kind, _unified_extracted_payload(file_kind=file_kind, text=text)
 
     if file_kind == "doc":
         text = _normalize_newlines(_extract_doc_text(contents))
         text = _truncate_text(text, max_text_chars)
         if not text.strip():
             raise ParseFileError(code="TEXT_DECODE_FAILED", message="Failed to extract text from DOC file.")
-        return file_kind, {"text": text}
+        return file_kind, _unified_extracted_payload(
+            file_kind=file_kind,
+            text=text,
+            warnings=["legacy_doc_best_effort_extraction"],
+        )
 
     if file_kind == "pdf":
         from PyPDF2 import PdfReader
@@ -379,7 +543,13 @@ def extract_extracted_input_from_bytes(
                 # Best-effort extraction
                 texts.append("")
         text = _truncate_text(_normalize_newlines("\n".join(texts).strip()), max_text_chars)
-        return file_kind, {"text": text}
+        if not text.strip():
+            raise ParseFileError(
+                code="TEXT_DECODE_FAILED",
+                message="Failed to extract text from PDF file. The document may be scanned/image-only or protected.",
+            )
+        records = _records_from_text_key_value(text, max_rows=max_rows)
+        return file_kind, _unified_extracted_payload(file_kind=file_kind, text=text, records=records)
 
     if file_kind == "docx":
         from docx import Document
@@ -391,7 +561,7 @@ def extract_extracted_input_from_bytes(
             if p.text:
                 paragraphs.append(p.text)
         # Tables: best-effort, but compact.
-        tables: List[List[List[str]]] = []
+        tables: List[Dict[str, Any]] = []
         tables_iter = doc.tables if max_rows is None else doc.tables[: max(1, max_rows)]
         for t in tables_iter:
             table_data: List[List[str]] = []
@@ -400,15 +570,28 @@ def extract_extracted_input_from_bytes(
                 for cell in row.cells:
                     row_data.append((cell.text or "").strip())
                 table_data.append(row_data)
-            tables.append(table_data)
+            headers: List[str] = table_data[0] if table_data else []
+            rows: List[Dict[str, str]] = []
+            if headers and len(table_data) > 1 and any(h for h in headers):
+                for raw_row in table_data[1:]:
+                    row_obj: Dict[str, str] = {}
+                    for idx, header in enumerate(headers):
+                        key = (header or "").strip() or f"col_{idx + 1}"
+                        row_obj[key] = raw_row[idx] if idx < len(raw_row) else ""
+                    rows.append(row_obj)
+            tables.append({"headers": headers, "rows": rows, "raw": table_data})
 
         text = _truncate_text(_normalize_newlines("\n".join(paragraphs).strip()), max_text_chars)
-        return file_kind, {"text": text, "tables": tables}
+        records = _records_from_doc_tables(tables, max_rows=max_rows)
+        if not records:
+            records = _records_from_text_key_value(text, max_rows=max_rows)
+        return file_kind, _unified_extracted_payload(file_kind=file_kind, text=text, tables=tables, records=records)
 
     if file_kind in {"png", "jpg", "tiff"}:
         text = _extract_image_transcript(contents, file_kind)
         text = _truncate_text(_normalize_newlines(text), max_text_chars)
-        return file_kind, {"text": text}
+        records = _records_from_ocr_text(text, max_rows=max_rows)
+        return file_kind, _unified_extracted_payload(file_kind=file_kind, text=text, records=records)
 
     raise ParseFileError(
         code="UNSUPPORTED_FILE_TYPE",

@@ -190,7 +190,7 @@ curl -X POST "http://localhost:8000/infer-schema" \
 - Для `odt` используется `odfpy`.
 - Для `epub` используется `ebooklib` + `BeautifulSoup`.
 - Для `doc` используется best-effort извлечение текста из бинарного контента.
-- Для изображений (`png/jpg/tiff`) используется `GigaChat vision`: изображение сначала загружается в `/files`, затем распознаётся через `/chat/completions` с `attachments`.
+- Для изображений (`png/jpg/tiff`) используется локальный OCR через `Tesseract` (backend извлекает текст до этапа LLM-генерации).
 
 Если OCR/декодирование не смогли извлечь текст, backend возвращает контролируемую ошибку с кодом.
 
@@ -211,14 +211,14 @@ curl -X POST "http://localhost:8000/infer-schema" \
 - `GIGACHAT_MAX_TOKENS`
 - `GIGACHAT_RETRY_ATTEMPTS`
 - `GIGACHAT_TIMEOUT_SECONDS`
-- `GIGACHAT_IMAGE_TRANSCRIPTION_MAX_TOKENS` (опционально)
-- `GIGACHAT_FILE_UPLOAD_TIMEOUT_SECONDS` (опционально)
 
 ### Парсер
 
 - `PARSE_MAX_ROWS`
 - `PARSE_MAX_TEXT_CHARS`
-- OCR-параметры (`OCR_LANG`, `OCR_PSM`, `OCR_FALLBACK_PSM`) больше не нужны, т.к. распознавание картинок идёт через GigaChat.
+- `OCR_LANG` (например, `rus+eng`)
+- `OCR_PSM` (режим сегментации страницы)
+- `OCR_FALLBACK_PSM` (fallback-режим, используется для TIFF)
 
 ### Auth / почта / reCAPTCHA
 

@@ -49,6 +49,7 @@ export async function parseBackendError(res: Response): Promise<{ status: number
 export function mapStatusToUserMessage(status: number, detail?: string, code?: string): string {
   if (code === "UNSUPPORTED_FILE_TYPE") return "Файл данного типа не поддерживается.";
   if (code === "OCR_NO_TEXT") return "Не удалось распознать текст на изображении. Загрузите более четкое изображение.";
+  if (code === "OCR_FAILED") return "Не удалось обработать изображение через OCR. Повторите попытку с другим изображением.";
   if (code === "TEXT_DECODE_FAILED") return "Не удалось корректно прочитать текстовый файл. Проверьте кодировку файла.";
 
   if (status === 401) return "Требуется вход или сессия истекла. Войдите снова.";
@@ -57,7 +58,7 @@ export function mapStatusToUserMessage(status: number, detail?: string, code?: s
   }
   if (status === 404) return "Запрошенный ресурс не найден.";
   if (status === 429 || code === "GIGACHAT_RATE_LIMIT") {
-    return "GigaChat временно ограничил количество запросов (429). Подождите немного и повторите попытку.";
+    return "Сервис генерации временно ограничил количество запросов (429). Подождите немного и повторите попытку.";
   }
   if (status === 415) {
     const d = (detail || "").toLowerCase();
