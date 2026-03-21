@@ -1,7 +1,9 @@
 import React from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import ts from "typescript";
+import { useAuth } from "../context/AuthContext";
 
-type CheckPageProps = {
+type LocationState = {
   initialCode?: string;
   inputFile?: File | null;
 };
@@ -12,8 +14,13 @@ function stripInterfaceBlocks(source: string): string {
   return source.replace(/interface\s+[A-Za-z_$][\w$]*\s*\{[\s\S]*?\}\s*/g, "");
 }
 
-export default function CheckPage(props: CheckPageProps) {
-  const { initialCode, inputFile } = props;
+export default function CheckPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { logout } = useAuth();
+  const st = (location.state || {}) as LocationState;
+  const initialCode = st.initialCode;
+  const inputFile = st.inputFile ?? null;
 
   const [codeInput, setCodeInput] = React.useState<string>(initialCode ?? "");
 
@@ -117,7 +124,17 @@ export default function CheckPage(props: CheckPageProps) {
 
   return (
     <div className="container">
-      <h1 style={{ marginTop: 0 }}>Проверка TypeScript-кода</h1>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
+        <h1 style={{ marginTop: 0, marginBottom: 0 }}>Проверка TypeScript-кода</h1>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button type="button" onClick={() => navigate("/generator")}>
+            Генерация
+          </button>
+          <button type="button" onClick={logout}>
+            Выйти
+          </button>
+        </div>
+      </div>
 
       <div className="row">
         <div className="card">

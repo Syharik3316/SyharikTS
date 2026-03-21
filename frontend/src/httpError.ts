@@ -51,7 +51,7 @@ export function mapStatusToUserMessage(status: number, detail?: string, code?: s
   if (code === "OCR_NO_TEXT") return "Не удалось распознать текст на изображении. Загрузите более четкое изображение.";
   if (code === "TEXT_DECODE_FAILED") return "Не удалось корректно прочитать текстовый файл. Проверьте кодировку файла.";
 
-  if (status === 401) return "Не удалось выполнить запрос.";
+  if (status === 401) return "Требуется вход или сессия истекла. Войдите снова.";
   if (status === 403) {
     return detail ? `Доступ запрещен: ${detail}` : "Доступ запрещен.";
   }

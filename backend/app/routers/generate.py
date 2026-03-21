@@ -1,8 +1,10 @@
 import json
 import os
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
+from app.dependencies.auth import get_current_user
 from app.models.schemas import GenerateResponse
+from app.models.user import User
 from app.services.file_parser import ParseFileError, SUPPORTED_FILE_KINDS, extract_extracted_input
 from app.services.prompt_builder import build_generation_prompt, build_interface_ts
 from app.services.llm_client import LLMClient
@@ -22,6 +24,7 @@ def _read_optional_positive_int(name: str) -> int | None:
 
 @router.post("/generate", response_model=GenerateResponse)
 async def generate(
+    _user: User = Depends(get_current_user),
     file: UploadFile = File(..., description=f"Uploaded file ({'/'.join(k.upper() for k in SUPPORTED_FILE_KINDS)})"),
     schema: str = Form(..., description="JSON-string schema example for output objects"),
 ):

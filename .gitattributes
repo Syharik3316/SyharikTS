@@ -1,2 +1,5 @@
-# Shell scripts must use LF so they run on Linux (avoid bash\r / set -o pipefail^M).
+# Force LF for shell/SQL so Linux/bash never sees CRLF (^M).
+* text=auto
 *.sh text eol=lf
+*.bash text eol=lf
+*.sql text eol=lf

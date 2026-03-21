@@ -12,6 +12,8 @@
     "highlight.js": "*",
     "react": "*",
     "react-dom": "*",
+    "react-google-recaptcha": "*",
+    "react-router-dom": "*",
     "typescript": "*"
   },
   "devDependencies": {

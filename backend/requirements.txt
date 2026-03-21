@@ -27,3 +27,9 @@ requests
 sqlalchemy[asyncio]
 asyncpg
 
+python-jose[cryptography]
+bcrypt>=4.1.0
+aiosmtplib
+httpx
+email-validator
+

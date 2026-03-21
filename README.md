@@ -4,9 +4,10 @@
 
 ## Что умеет
 
+- Регистрация и вход (**email**, **логин**, **пароль**), подтверждение email кодом из письма, сброс пароля.
 - Загружает файл, парсит данные/текст и формирует `extracted_input_json`.
-- Генерирует TypeScript-код через LLM (`/generate`).
-- Строит пример схемы по файлу (`/infer-schema`).
+- Генерирует TypeScript-код через LLM (`/generate`) — **только для авторизованных пользователей**.
+- Строит пример схемы по файлу (`/infer-schema`) — **только для авторизованных пользователей**.
 - Возвращает стабильные коды ошибок парсинга (`UNSUPPORTED_FILE_TYPE`, `OCR_NO_TEXT`, `TEXT_DECODE_FAILED`).
 
 ## Поддерживаемые форматы
@@ -17,7 +18,7 @@
 
 ## Стек
 
-- Backend: `Python`, `FastAPI`, `LangChain`, опционально `PostgreSQL` через `SQLAlchemy` (async) + `asyncpg`
+- Backend: `Python`, `FastAPI`, `LangChain`
 - Frontend: `React` (`Vite`)
 - Контейнеризация: `Docker`, `docker compose`
 
@@ -51,54 +52,89 @@ npm run dev
 
 Frontend по умолчанию: `http://localhost:5173`.
 
+## Авторизация и БД
+
+- Таблицы пользователей и токенов создаются **одним SQL-файлом**: [`backend/migrations/001_auth_tables.sql`](backend/migrations/001_auth_tables.sql).
+- На Ubuntu после создания БД (см. `scripts/init_syharikts_db.sh`) примените миграции:
+  ```bash
+  export DATABASE_URL='postgresql+asyncpg://USER:PASS@127.0.0.1:5432/syharikts'
+  bash scripts/run_migrations.sh
+  ```
+- Скрипты `scripts/*.sh` должны быть с переводами строк **LF** (Linux). Если видите `$'\r': command not found`, см. [`scripts/README.md`](scripts/README.md). В репозитории: `.gitattributes` + `.editorconfig`; после `git pull` при необходимости выполните `git add --renormalize .` один раз.
+- Для работы входа и защищённых API нужны **`DATABASE_URL`** и **`JWT_SECRET`** (не менее 32 символов).
+- Регистрация и сброс пароля отправляют **6-значный код** на email (настройте **SMTP** в `.env`). Если `SMTP_HOST` пустой, письма не уходят, текст пишется в лог backend (только для разработки).
+- **reCAPTCHA v2** (обязательно для регистрации и запроса сброса пароля): ключи в [Google reCAPTCHA](https://www.google.com/recaptcha/admin); в backend — `RECAPTCHA_SECRET_KEY`, при сборке frontend — `VITE_RECAPTCHA_SITE_KEY`. Без секрета backend отклоняет проверку; без site key формы регистрации / шага 1 сброса на фронте заблокированы.
+
+### Маршруты frontend (SPA)
+
+- `/login` — вход и регистрация  
+- `/verify-email` — только после успешной регистрации (email хранится в `sessionStorage`, прямой заход редиректит на `/login`); ввод кода и повторная отправка с таймером 1 мин  
+- `/reset-password` — запрос кода и установка нового пароля  
+- `/generator`, `/check` — только для авторизованных пользователей  
+
+`POST /generate` и `POST /infer-schema` требуют заголовок **`Authorization: Bearer <access_token>`**.
+
 ## API
 
-### `GET /health`
-
-Проверка живости процесса и (если задан `DATABASE_URL`) доступности БД.
-
-Ответ:
-
-```json
-{
-  "status": "ok",
-  "database": { "state": "skipped", "detail": null }
-}
-```
-
-Поле `database.state`: `skipped` (URL не задан), `ok`, `error` (в `detail` — краткий текст ошибки). При ошибке подключения процесс всё равно стартует; статус смотрите в `/health`.
+### Routes
+- `POST /auth/register`, `POST /auth/verify-email`, `POST /auth/resend-registration-code`, `POST /auth/login`, `POST /auth/refresh`
+- `POST /auth/reset-request`, `POST /auth/reset-confirm`
+- `GET /auth/me` (Bearer)
+- `POST /generate` (Bearer)
+- `POST /infer-schema` (Bearer)
 
 ### `POST /generate`
 
-`multipart/form-data`:
+Описание:
+- Вход:
+  - `file` (UploadFile): CSV/XLS/XLSX/PDF/DOCX/PNG/JPG
+  - `schema` (str): JSON-строка примера выходной структуры
+- Ответ:
+  - `GenerateResponse`:
+    - `code`: TypeScript строка
 
-- `file` - входной файл одного из поддерживаемых форматов
-- `schema` - JSON-строка с примером выходного объекта
+Ошибки:
+- 401: нет или невалидный Bearer-токен
+- 400: missing/invalid input, parse error, invalid schema
+- 415: unsupported media type или невалидный файл
+- 500: LLM generation error
 
-Ответ:
-
-```json
-{ "code": "export default function ... " }
-```
-
-Пример:
+Пример (подставьте `ACCESS_TOKEN` после `POST /auth/login`):
 
 ```bash
-curl -X POST "http://localhost:8000/generate" ^
-  -F "file=@./example.csv" ^
-  -F "schema={\"dateCreate\":\"2026-01-01\",\"dateLastUpdate\":\"2026-01-02\",\"product\":\"ABC\"}"
+curl -X POST "http://localhost:8000/generate" \
+  -H "Authorization: Bearer ACCESS_TOKEN" \
+  -F "file=@./example.csv" \
+  -F 'schema={"dateCreate":"2026-01-01","product":"ABC"}'
+```
+
+или с экранированием в bash:
+
+```bash
+curl -X POST "http://localhost:8000/generate" \
+  -F "file=@./example.csv" \
+  -F "schema={\"dateCreate\":\"2026-01-01\",\"product\":\"ABC\"}"
 ```
 
 ### `POST /infer-schema`
 
-`multipart/form-data`:
+Описание:
+- Вход:
+  - `file` (UploadFile)
+- Ответ:
+  - `InferSchemaResponse`:
+    - `schema`: JSON в строке
 
-- `file` - входной файл
+Ошибки:
+- 400: parse/missing file
+- 415: unsupported media type
 
-Ответ:
+Пример:
 
-```json
-{ "schema": "{\"field\":\"example\"}" }
+```bash
+curl -X POST "http://localhost:8000/infer-schema" \
+  -H "Authorization: Bearer ACCESS_TOKEN" \
+  -F "file=@./example.csv"
 ```
 
 ## Парсинг и OCR
@@ -139,85 +175,22 @@ curl -X POST "http://localhost:8000/generate" ^
 - `OCR_PSM` (например `6`)
 - `OCR_FALLBACK_PSM` (например `11`)
 
+### Auth / почта / reCAPTCHA
+
+- `JWT_SECRET`, `JWT_ACCESS_EXPIRE_MINUTES`, `JWT_REFRESH_EXPIRE_DAYS`
+- `VERIFICATION_CODE_TTL_MINUTES` (по умолчанию 15)
+- `RESEND_VERIFICATION_COOLDOWN_SECONDS` (пауза между повторной отправкой кода регистрации, по умолчанию 60)
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USE_TLS`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`
+- `RECAPTCHA_SECRET_KEY` (backend)
+- `VITE_RECAPTCHA_SITE_KEY` (сборка frontend)
+
 ### Прочее
 
 - `CORS_ALLOW_ORIGINS`
 - `VITE_API_BASE_URL` (для frontend)
-- `DATABASE_URL` (опционально) — строка для async-подключения к PostgreSQL, формат: `postgresql+asyncpg://USER:PASSWORD@HOST:5432/DBNAME` (спецсимволы в пароле — URL-encoding)
-- `DATABASE_CONNECT_TIMEOUT` (опционально) — секунды на TCP-подключение к Postgres (asyncpg), по умолчанию `10`; уменьшает «подвисание» `/health`, если БД недоступна
+- `DATABASE_URL`, `DATABASE_CONNECT_TIMEOUT`
 
 Актуальный пример смотрите в `.env.example`.
-
-## PostgreSQL с нуля (Ubuntu Server)
-
-Ниже — установка **внешней** по отношению к `docker compose` этого репозитория базы на том же сервере или на отдельной машине. Production-хостинг предполагается на **Ubuntu Server**.
-
-Чтобы создать БД `syharikts`, пользователя `syharikts_usr` и сразу получить в терминале готовые строки `DATABASE_URL`, на сервере после установки PostgreSQL выполните: `sudo bash scripts/init_syharikts_db.sh` (файл в каталоге [`scripts/`](scripts/)). Скрипт должен быть с переводами строк **LF** (Unix); если при запуске видно `bash\r` или ошибку у `set -o pipefail`, выполните на сервере: `sed -i 's/\r$//' scripts/init_syharikts_db.sh`, либо заново скопируйте файл из репозитория (в проекте для `*.sh` задано `eol=lf` в [`.gitattributes`](.gitattributes)).
-
-### Установка и сервис
-
-```bash
-sudo apt update
-sudo apt install -y postgresql postgresql-contrib
-sudo systemctl enable --now postgresql
-```
-
-Конфигурация обычно в `/etc/postgresql/<версия>/main/postgresql.conf` и `pg_hba.conf`.
-
-### Пользователь и база
-
-```bash
-sudo -u postgres psql
-```
-
-В консоли `psql`:
-
-```sql
-CREATE USER appuser WITH PASSWORD 'your-secure-password';
-CREATE DATABASE appdb OWNER appuser;
-GRANT ALL PRIVILEGES ON DATABASE appdb TO appuser;
-\q
-```
-
-### Доступ с другой машины
-
-Если приложение подключается **не с localhost**, в `postgresql.conf` задайте `listen_addresses` (например `'*'` или конкретный IP). В `pg_hba.conf` добавьте строку вида `host appdb appuser <подсеть_приложения>/24 scram-sha-256` (уточните метод под вашу версию PostgreSQL). Затем:
-
-```bash
-sudo systemctl restart postgresql
-```
-
-При необходимости откройте порт только для нужной подсети:
-
-```bash
-sudo ufw allow from <подсеть_приложения> to any port 5432 proto tcp
-```
-
-Избегайте открытия `5432` для всего интернета без крайней необходимости.
-
-### Backend в Docker, PostgreSQL на том же Ubuntu
-
-[`docker-compose.yml`](docker-compose.yml) использует **`network_mode: host`** — backend делит сеть с хостом, поэтому в `DATABASE_URL` указывайте **`127.0.0.1`**:
-
-```
-DATABASE_URL=postgresql+asyncpg://appuser:secret@127.0.0.1:5432/appdb
-```
-
-Nginx по-прежнему обращается к `127.0.0.1:8000`. Никаких iptables и шлюзов Docker.
-
-### Проверка
-
-Задайте `DATABASE_URL` и вызовите `GET /health` — при успехе будет `database.state`: `ok`.
-
-### Ошибки подключения
-
-С `network_mode: host` backend и PostgreSQL оба на хосте — `127.0.0.1:5432` должен быть доступен. Если `/health` возвращает `database.state: error`:
-- **`Connection refused`** — проверьте `ss -tlnp | grep 5432` и `listen_addresses` в PostgreSQL.
-- **`TimeoutError`** — маловероятно при host-режиме; проверьте, что `DATABASE_URL` указывает на `127.0.0.1`, а не на `172.x.x.x`.
-
-### Разработка на Windows
-
-При локальном запуске backend в Docker без `network_mode: host` используйте `host.docker.internal` в `DATABASE_URL` (Docker Desktop на Windows его поддерживает). Для production на Ubuntu используется host-режим.
 
 ## Тесты
 
@@ -233,11 +206,9 @@ python -m unittest discover -s tests -v
 - детекция форматов
 - парсинг `txt/md/xml/rtf`
 - контролируемые ошибки unsupported/OCR
-- `GET /health` без `DATABASE_URL` (`database.state` = `skipped`)
 
 ## Важные замечания
 
 - Для `doc` используется эвристический best-effort парсинг (без внешних системных утилит).
 - Качество OCR зависит от качества изображения и установленного языка Tesseract (`OCR_LANG`).
 - В production рекомендуется ограничивать `PARSE_MAX_TEXT_CHARS` и `PARSE_MAX_ROWS`.
-

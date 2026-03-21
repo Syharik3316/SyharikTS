@@ -2,10 +2,13 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import ProgrammingError
 
 from app.db import check_connection, database_url, dispose_engine
+from app.routers.auth import router as auth_router
 from app.routers.generate import router as generate_router
 from app.routers.infer_schema import router as infer_schema_router
 
@@ -45,14 +48,28 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    @app.exception_handler(ProgrammingError)
+    async def programming_error_handler(_request: Request, exc: ProgrammingError) -> JSONResponse:
+        """Missing tables / bad SQL → clearer than generic 500 (e.g. migrations not applied)."""
+        logger.exception("Database programming error: %s", exc)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "Ошибка схемы БД (часто не применены миграции). Проверьте DATABASE_URL и backend/migrations.",
+            },
+        )
+
     @app.get("/health")
     async def health():
         state, detail = await check_connection()
         return {"status": "ok", "database": {"state": state, "detail": detail}}
 
+    app.include_router(auth_router)
     app.include_router(generate_router)
     app.include_router(infer_schema_router)
     return app
 
 
 app = create_app()
+
+#PotJoke wuz here
