@@ -5,7 +5,7 @@ export type GenerateResponse = {
   code: string;
 };
 
-export async function generateTsCode(file: File, schemaText: string): Promise<string> {
+export async function generateTsCode(file: File, schemaText: string, signal?: AbortSignal): Promise<string> {
   const form = new FormData();
   form.append("file", file);
   form.append("schema", schemaText);
@@ -13,6 +13,7 @@ export async function generateTsCode(file: File, schemaText: string): Promise<st
   const res = await authorizedFetch("/generate", {
     method: "POST",
     body: form,
+    signal,
   });
 
   if (!res.ok) {

@@ -2,6 +2,7 @@ import os
 import json
 import time
 import uuid
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -520,6 +521,17 @@ class LLMClient:
 
         if not content:
             raise RuntimeError("GigaChat returned empty content")
+
+        if int(self.last_usage.get("total_tokens") or 0) <= 0:
+            prompt_tokens = self._count_tokens_via_gigachat_api(prompt, model=model, auth_header=auth_header, verify_tls=verify_tls)
+            completion_tokens = self._count_tokens_via_gigachat_api(
+                content, model=model, auth_header=auth_header, verify_tls=verify_tls
+            )
+            self.last_usage = {
+                "prompt_tokens": int(prompt_tokens or 0),
+                "completion_tokens": int(completion_tokens or 0),
+                "total_tokens": int((prompt_tokens or 0) + (completion_tokens or 0)),
+            }
         code = extract_typescript_code(content)
 
         # Retry several times with escalating instructions when output is truncated or invalid.
@@ -837,6 +849,59 @@ class LLMClient:
 
         self.__class__._gigachat_token_cache = (access_token, expires_at_ts)
         return access_token, expires_at_ts
+
+    def _count_tokens_via_gigachat_api(
+        self,
+        text: str,
+        *,
+        model: str,
+        auth_header: str,
+        verify_tls: bool,
+    ) -> int:
+        base_url = (os.getenv("GIGACHAT_BASE_URL") or "https://gigachat.devices.sberbank.ru/api/v1").strip().rstrip("/")
+        url = f"{base_url}/tokens/count"
+        payload = {"model": model, "input": [text]}
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Authorization": auth_header,
+        }
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=60, verify=verify_tls)
+            if resp.status_code != 200:
+                return 0
+            data = resp.json()
+            return self._extract_tokens_count_value(data)
+        except Exception:
+            return 0
+
+    def _extract_tokens_count_value(self, data: Any) -> int:
+        if isinstance(data, dict):
+            for key in ("tokens", "total_tokens", "count"):
+                val = data.get(key)
+                if isinstance(val, int):
+                    return max(0, val)
+            # Common response shape: {"tokens":[{"tokens":123}]}
+            maybe_tokens = data.get("tokens")
+            if isinstance(maybe_tokens, list) and maybe_tokens:
+                first = maybe_tokens[0]
+                if isinstance(first, dict):
+                    for key in ("tokens", "count", "total_tokens"):
+                        v = first.get(key)
+                        if isinstance(v, int):
+                            return max(0, v)
+            dumped = json.dumps(data, ensure_ascii=False)
+            m = re.search(r'"tokens"\s*:\s*(\d+)', dumped)
+            if m:
+                return int(m.group(1))
+            return 0
+        if isinstance(data, list) and data:
+            first = data[0]
+            if isinstance(first, dict):
+                val = first.get("tokens")
+                if isinstance(val, int):
+                    return max(0, val)
+        return 0
 
     def _extract_usage_from_payload(self, payload: Any) -> Dict[str, int]:
         if not isinstance(payload, dict):

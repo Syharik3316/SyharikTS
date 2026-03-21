@@ -94,6 +94,7 @@ export default function Upload() {
   const fileInputRef = useRef(null);
   const jsonImportInputRef = useRef(null);
   const shrinkTimerRef = useRef(null);
+  const generationAbortRef = useRef(null);
 
   const splitLayout = viewState === 'shrinking' || viewState === 'split';
   const showRightPanel = viewState === 'split';
@@ -109,6 +110,19 @@ export default function Upload() {
   }, []);
 
   useEffect(() => () => clearShrinkTimer(), [clearShrinkTimer]);
+
+  useEffect(() => {
+    const abortGeneration = () => {
+      generationAbortRef.current?.abort();
+    };
+    window.addEventListener('beforeunload', abortGeneration);
+    window.addEventListener('pagehide', abortGeneration);
+    return () => {
+      abortGeneration();
+      window.removeEventListener('beforeunload', abortGeneration);
+      window.removeEventListener('pagehide', abortGeneration);
+    };
+  }, []);
 
   // Prefill for navigation from generation detail page + load saved upload for TS check.
   useEffect(() => {
@@ -318,15 +332,24 @@ export default function Upload() {
     }
     startResultPanel();
     setBackendLoading(true);
+    const controller = new AbortController();
+    generationAbortRef.current = controller;
     try {
-      const code = await generateTsCode(primaryFile, noteText);
+      const code = await generateTsCode(primaryFile, noteText, controller.signal);
       setBackendText(code);
       // For requirement: after generation, switching to "Проверка TS"
       // must auto-populate the textarea with the generated code.
       setTsCodeText(code);
     } catch (err) {
-      setBackendError(handleApiError(err));
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        setBackendError('Генерация была прервана (страница закрыта или запрос отменён).');
+      } else {
+        setBackendError(handleApiError(err));
+      }
     } finally {
+      if (generationAbortRef.current === controller) {
+        generationAbortRef.current = null;
+      }
       setBackendLoading(false);
     }
   };

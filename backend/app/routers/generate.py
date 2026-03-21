@@ -2,7 +2,7 @@ import base64
 import json
 import os
 from typing import Any
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies.auth import get_current_user
@@ -47,6 +47,12 @@ def _coerce_schema_to_dict(schema_obj: Any) -> dict[str, Any] | None:
     return None
 
 
+def _estimate_tokens_from_text(text: str) -> int:
+    # Rough cross-provider estimate: ~4 chars per token for mixed text/code payloads.
+    compact = text or ""
+    return max(1, (len(compact) + 3) // 4)
+
+
 def _validate_generated_code_shape(*, code: str, schema_obj: Any, file_kind: str) -> None:
     schema_dict = _coerce_schema_to_dict(schema_obj)
     if schema_dict is None:
@@ -77,11 +83,16 @@ def _validate_generated_code_shape(*, code: str, schema_obj: Any, file_kind: str
 
 @router.post("/generate", response_model=GenerateResponse)
 async def generate(
+    request: Request,
     _user: User = Depends(get_current_user),
     db: AsyncSession | None = Depends(get_db),
     file: UploadFile = File(..., description=f"Uploaded file ({'/'.join(k.upper() for k in SUPPORTED_FILE_KINDS)})"),
     schema: str = Form(..., description="JSON-string schema example for output objects"),
 ):
+    async def _fail_if_disconnected() -> None:
+        if await request.is_disconnected():
+            raise HTTPException(status_code=499, detail="Client closed request, generation cancelled")
+
     trace = LangfuseTrace(
         name="generate_request",
         user_id=str(_user.id),
@@ -97,6 +108,7 @@ async def generate(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid schema JSON: {e}")
 
+    await _fail_if_disconnected()
     with trace.span("read_uploaded_file"):
         contents = await file.read()
     try:
@@ -132,6 +144,7 @@ async def generate(
             extracted_input_json, schema_obj, interface_ts=interface_ts, file_kind=file_kind
         )
 
+    await _fail_if_disconnected()
     try:
         client = LLMClient()
         client._active_trace = trace
@@ -171,6 +184,11 @@ async def generate(
     prompt_tokens = int(usage.get("prompt_tokens") or 0)
     completion_tokens = int(usage.get("completion_tokens") or 0)
     total_tokens = int(usage.get("total_tokens") or (prompt_tokens + completion_tokens))
+    if total_tokens <= 0:
+        # Some providers do not return usage in response payload.
+        prompt_tokens = _estimate_tokens_from_text(prompt)
+        completion_tokens = _estimate_tokens_from_text(code)
+        total_tokens = prompt_tokens + completion_tokens
 
     if not code or not code.strip():
         raise HTTPException(status_code=500, detail="LLM returned empty code")
@@ -184,6 +202,7 @@ async def generate(
     max_store = _read_generation_history_max_input_bytes()
     input_b64 = base64.b64encode(contents).decode("ascii") if len(contents) <= max_store else None
 
+    await _fail_if_disconnected()
     if db is not None:
         with trace.span("persist_generation_history"):
             db.add(
