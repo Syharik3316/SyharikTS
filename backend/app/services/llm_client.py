@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import threading
 import uuid
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -84,6 +85,8 @@ def _collect_schema_keys(schema_obj: Any) -> set[str]:
 
 
 class LLMClient:
+    _gigachat_token_cache_lock = threading.Lock()
+
     def __init__(self) -> None:
         self.provider = (os.getenv("LLM_PROVIDER", "stub") or "stub").strip().lower()
         self._active_trace: LangfuseTrace | None = None
@@ -758,97 +761,98 @@ class LLMClient:
         """
         Возвращает (access_token, expires_at_unix_seconds) и кеширует токен в памяти.
         """
-        cached = getattr(self.__class__, "_gigachat_token_cache", None)
-        if cached:
-            token, expires_at = cached
-            if expires_at > time.time() + 60:
-                return token, expires_at
+        with self.__class__._gigachat_token_cache_lock:
+            cached = getattr(self.__class__, "_gigachat_token_cache", None)
+            if cached:
+                token, expires_at = cached
+                if expires_at > time.time() + 60:
+                    return token, expires_at
 
-        oauth_url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
-        rq_uid = str(uuid.uuid4())
+            oauth_url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
+            rq_uid = str(uuid.uuid4())
 
-        # Authorization header должен быть Basic <base64...>
-        if auth_key.lower().startswith("basic "):
-            auth_header = auth_key
-        else:
-            auth_header = f"Basic {auth_key}"
+            # Authorization header должен быть Basic <base64...>
+            if auth_key.lower().startswith("basic "):
+                auth_header = auth_key
+            else:
+                auth_header = f"Basic {auth_key}"
 
-        headers = {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Accept": "application/json",
-            "RqUID": rq_uid,
-            "Authorization": auth_header,
-        }
-        configured_scope = (os.getenv("GIGACHAT_SCOPE") or "").strip()
-        scope_candidates: List[str] = []
-        if configured_scope:
-            scope_candidates.append(configured_scope)
-        # Keep backward compatibility with setups where only AUTHORIZATION_KEY was configured.
-        for candidate in ["GIGACHAT_API_PERS", "GIGACHAT_API_B2B", "GIGACHAT_API_CORP"]:
-            if candidate not in scope_candidates:
-                scope_candidates.append(candidate)
+            headers = {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "application/json",
+                "RqUID": rq_uid,
+                "Authorization": auth_header,
+            }
+            configured_scope = (os.getenv("GIGACHAT_SCOPE") or "").strip()
+            scope_candidates: List[str] = []
+            if configured_scope:
+                scope_candidates.append(configured_scope)
+            # Keep backward compatibility with setups where only AUTHORIZATION_KEY was configured.
+            for candidate in ["GIGACHAT_API_PERS", "GIGACHAT_API_B2B", "GIGACHAT_API_CORP"]:
+                if candidate not in scope_candidates:
+                    scope_candidates.append(candidate)
 
-        last_error: str = ""
-        resp = None
-        oauth_retry_attempts = int((os.getenv("GIGACHAT_OAUTH_RETRY_ATTEMPTS") or "3").strip() or "3")
-        oauth_retry_delay_ms = int((os.getenv("GIGACHAT_OAUTH_RETRY_DELAY_MS") or "1200").strip() or "1200")
-        for scope in scope_candidates:
-            attempt = 0
-            while True:
-                resp = requests.post(
-                    oauth_url,
-                    headers=headers,
-                    data={"scope": scope},
-                    timeout=60,
-                    verify=verify_tls,
-                )
+            last_error: str = ""
+            resp = None
+            oauth_retry_attempts = int((os.getenv("GIGACHAT_OAUTH_RETRY_ATTEMPTS") or "3").strip() or "3")
+            oauth_retry_delay_ms = int((os.getenv("GIGACHAT_OAUTH_RETRY_DELAY_MS") or "1200").strip() or "1200")
+            for scope in scope_candidates:
+                attempt = 0
+                while True:
+                    resp = requests.post(
+                        oauth_url,
+                        headers=headers,
+                        data={"scope": scope},
+                        timeout=60,
+                        verify=verify_tls,
+                    )
+                    if resp.status_code == 200:
+                        break
+                    # OAuth endpoint can burst-limit; retry same scope with backoff.
+                    if resp.status_code == 429 and attempt < max(0, oauth_retry_attempts - 1):
+                        attempt += 1
+                        time.sleep((oauth_retry_delay_ms * attempt) / 1000.0)
+                        continue
+                    break
                 if resp.status_code == 200:
                     break
-                # OAuth endpoint can burst-limit; retry same scope with backoff.
-                if resp.status_code == 429 and attempt < max(0, oauth_retry_attempts - 1):
-                    attempt += 1
-                    time.sleep((oauth_retry_delay_ms * attempt) / 1000.0)
-                    continue
-                break
-            if resp.status_code == 200:
-                break
 
-            try:
-                body = resp.json()
-            except Exception:
-                body = None
-            msg = ""
-            if isinstance(body, dict):
-                msg = body.get("error_description") or body.get("error") or json.dumps(body)
-            details = msg or resp.text[:300]
-            last_error = f"scope={scope}: {details}"
+                try:
+                    body = resp.json()
+                except Exception:
+                    body = None
+                msg = ""
+                if isinstance(body, dict):
+                    msg = body.get("error_description") or body.get("error") or json.dumps(body)
+                details = msg or resp.text[:300]
+                last_error = f"scope={scope}: {details}"
 
-            if resp.status_code == 429:
-                raise RuntimeError(f"GIGACHAT_RATE_LIMIT: GigaChat OAuth error 429: {details}")
+                if resp.status_code == 429:
+                    raise RuntimeError(f"GIGACHAT_RATE_LIMIT: GigaChat OAuth error 429: {details}")
 
-            # For non-scope errors don't continue; fail fast.
-            if "scope from db not fully includes consumed scope" not in details:
-                raise RuntimeError(f"GigaChat OAuth error {resp.status_code}: {details}")
+                # For non-scope errors don't continue; fail fast.
+                if "scope from db not fully includes consumed scope" not in details:
+                    raise RuntimeError(f"GigaChat OAuth error {resp.status_code}: {details}")
 
-        if resp is None or resp.status_code != 200:
-            raise RuntimeError(
-                "GigaChat OAuth error 400: scope mismatch for provided GIGACHAT_AUTHORIZATION_KEY. "
-                f"Tried scopes: {', '.join(scope_candidates)}. Last error: {last_error}"
-            )
+            if resp is None or resp.status_code != 200:
+                raise RuntimeError(
+                    "GigaChat OAuth error 400: scope mismatch for provided GIGACHAT_AUTHORIZATION_KEY. "
+                    f"Tried scopes: {', '.join(scope_candidates)}. Last error: {last_error}"
+                )
 
-        body = resp.json()
-        access_token = body.get("access_token")
-        if not access_token:
-            raise RuntimeError(f"GigaChat OAuth response missing access_token: {body}")
+            body = resp.json()
+            access_token = body.get("access_token")
+            if not access_token:
+                raise RuntimeError(f"GigaChat OAuth response missing access_token: {body}")
 
-        expires_at = body.get("expires_at")
-        if isinstance(expires_at, (int, float)) and expires_at > 0:
-            expires_at_ts = float(expires_at)
-        else:
-            expires_at_ts = time.time() + 29 * 60
+            expires_at = body.get("expires_at")
+            if isinstance(expires_at, (int, float)) and expires_at > 0:
+                expires_at_ts = float(expires_at)
+            else:
+                expires_at_ts = time.time() + 29 * 60
 
-        self.__class__._gigachat_token_cache = (access_token, expires_at_ts)
-        return access_token, expires_at_ts
+            self.__class__._gigachat_token_cache = (access_token, expires_at_ts)
+            return access_token, expires_at_ts
 
     def _count_tokens_via_gigachat_api(
         self,

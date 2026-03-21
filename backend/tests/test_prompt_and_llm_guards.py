@@ -2,6 +2,7 @@ import asyncio
 import importlib.util
 import io
 import os
+import threading
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -110,6 +111,43 @@ class PromptAndGuardTests(unittest.TestCase):
                 os.environ.pop("LLM_PROVIDER", None)
             else:
                 os.environ["LLM_PROVIDER"] = old_provider
+
+    def test_gigachat_token_cache_refresh_is_thread_safe(self) -> None:
+        class _Resp:
+            status_code = 200
+            text = "ok"
+
+            @staticmethod
+            def json():
+                return {"access_token": "abc-token", "expires_at": time.time() + 3600}
+
+        calls = {"count": 0}
+
+        def _fake_post(*args, **kwargs):  # noqa: ANN002,ANN003
+            calls["count"] += 1
+            time.sleep(0.15)
+            return _Resp()
+
+        import time
+
+        client = LLMClient()
+        client.__class__._gigachat_token_cache = None
+        tokens: list[str] = []
+
+        def _worker() -> None:
+            token, _ = client._get_gigachat_access_token(auth_key="basic test-key", verify_tls=False)
+            tokens.append(token)
+
+        with mock.patch("app.services.llm_client.requests.post", side_effect=_fake_post):
+            t1 = threading.Thread(target=_worker)
+            t2 = threading.Thread(target=_worker)
+            t1.start()
+            t2.start()
+            t1.join()
+            t2.join()
+
+        self.assertEqual(tokens, ["abc-token", "abc-token"])
+        self.assertEqual(calls["count"], 1)
 
 class ParserRegressionTests(unittest.TestCase):
     @unittest.skipUnless(importlib.util.find_spec("PyPDF2") is not None, "PyPDF2 not installed")

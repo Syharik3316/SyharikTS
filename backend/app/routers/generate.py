@@ -1,8 +1,12 @@
 import base64
 import json
+import logging
 import os
+import time
+from functools import partial
 from typing import Any
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies.auth import get_current_user
@@ -15,6 +19,7 @@ from app.services.prompt_builder import build_generation_prompt, build_interface
 from app.services.llm_client import LLMClient
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _read_optional_positive_int(name: str) -> int | None:
@@ -89,6 +94,8 @@ async def generate(
     file: UploadFile = File(..., description=f"Uploaded file ({'/'.join(k.upper() for k in SUPPORTED_FILE_KINDS)})"),
     schema: str = Form(..., description="JSON-string schema example for output objects"),
 ):
+    request_started = time.perf_counter()
+
     async def _fail_if_disconnected() -> None:
         if await request.is_disconnected():
             raise HTTPException(status_code=499, detail="Client closed request, generation cancelled")
@@ -114,17 +121,22 @@ async def generate(
     try:
         parse_max_rows = _read_optional_positive_int("PARSE_MAX_ROWS")
         parse_max_text_chars = _read_optional_positive_int("PARSE_MAX_TEXT_CHARS")
+        parse_started = time.perf_counter()
         with trace.span(
             "parse_input_file",
             metadata={"content_type": file.content_type, "size_bytes": len(contents)},
         ):
-            file_kind, extracted_input_json = extract_extracted_input_from_bytes(
-                file.filename,
-                file.content_type,
-                contents,
-                max_rows=parse_max_rows,
-                max_text_chars=parse_max_text_chars,
+            file_kind, extracted_input_json = await run_in_threadpool(
+                partial(
+                    extract_extracted_input_from_bytes,
+                    file.filename,
+                    file.content_type,
+                    contents,
+                    max_rows=parse_max_rows,
+                    max_text_chars=parse_max_text_chars,
+                )
             )
+        parse_duration_ms = int((time.perf_counter() - parse_started) * 1000)
     except ParseFileError as e:
         status = 415 if e.code == "UNSUPPORTED_FILE_TYPE" else 429 if e.code == "GIGACHAT_RATE_LIMIT" else 400
         raise HTTPException(status_code=status, detail=e.as_detail())
@@ -148,18 +160,21 @@ async def generate(
     try:
         client = LLMClient()
         client._active_trace = trace
+        llm_started = time.perf_counter()
         with trace.span(
             "generate_typescript",
             input_data=build_safe_prompt_preview(prompt),
             metadata={"provider": client.provider, "file_kind": file_kind},
         ):
-            code = client.generate_ts_code(
+            code = await run_in_threadpool(
+                client.generate_ts_code,
                 prompt=prompt,
                 extracted_input_json=extracted_input_json,
                 schema_obj=schema_obj,
                 interface_ts=interface_ts,
                 file_kind=file_kind,
             )
+        llm_duration_ms = int((time.perf_counter() - llm_started) * 1000)
     except Exception as e:
         # Non-hardcoded safety net: deterministic local generator uses current schema + extracted payload.
         try:
@@ -169,7 +184,8 @@ async def generate(
             client.provider = "stub"
             try:
                 with trace.span("generate_typescript_stub_fallback"):
-                    code = client.generate_ts_code(
+                    code = await run_in_threadpool(
+                        client.generate_ts_code,
                         prompt=prompt,
                         extracted_input_json=extracted_input_json,
                         schema_obj=schema_obj,
@@ -219,5 +235,14 @@ async def generate(
             )
             await db.commit()
 
+    total_duration_ms = int((time.perf_counter() - request_started) * 1000)
+    logger.info(
+        "generate completed trace_id=%s file_kind=%s parse_ms=%d llm_ms=%d total_ms=%d",
+        trace.trace_id,
+        file_kind,
+        parse_duration_ms,
+        llm_duration_ms,
+        total_duration_ms,
+    )
     return GenerateResponse(code=code)
 
