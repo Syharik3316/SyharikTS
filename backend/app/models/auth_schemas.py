@@ -80,6 +80,10 @@ class UserPublic(BaseModel):
     email: str
     login: str
     is_email_verified: bool
+    telegram_chat_id: str | None = None
+    telegram_username: str | None = None
+    telegram_first_name: str | None = None
+    telegram_linked_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -139,3 +143,40 @@ class TokenUsageSummaryResponse(BaseModel):
     total_tokens: int
     requests_count: int
     requests: list[TokenUsageItem]
+
+
+class TelegramLinkCodeResponse(BaseModel):
+    link_command: str
+    code_expires_at: datetime
+    bot_url: str | None = None
+    bot_username: str | None = None
+
+
+class TelegramStatusResponse(BaseModel):
+    is_linked: bool
+    telegram_chat_id: str | None = None
+    telegram_username: str | None = None
+    telegram_first_name: str | None = None
+    telegram_linked_at: datetime | None = None
+
+
+class TelegramConsumeLinkRequest(BaseModel):
+    code: str = Field(..., min_length=6, max_length=32)
+    chat_id: str = Field(..., min_length=1, max_length=64)
+    username: str | None = Field(None, max_length=64)
+    first_name: str | None = Field(None, max_length=255)
+
+
+class BotGenerateResponse(BaseModel):
+    code: str
+    cache_hit: bool
+    main_file_name: str
+
+
+class BotProfileResponse(BaseModel):
+    id: uuid.UUID
+    email: str
+    login: str
+    telegram_username: str | None = None
+    recent_generations: list[GenerationHistoryItem]
+    token_usage: TokenUsageSummaryResponse

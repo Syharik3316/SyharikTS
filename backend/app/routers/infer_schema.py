@@ -35,5 +35,5 @@ async def infer_schema(
         raise HTTPException(status_code=400, detail=f"Failed to infer schema: {e}")
 
     schema_str = json.dumps(schema_obj, ensure_ascii=False)
-    return InferSchemaResponse(schema=schema_str)
+    return InferSchemaResponse(schema_text=schema_str)
 

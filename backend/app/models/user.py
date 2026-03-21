@@ -16,6 +16,10 @@ class User(Base):
     login: Mapped[str] = mapped_column(String(64), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     is_email_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    telegram_chat_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    telegram_username: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    telegram_first_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    telegram_linked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -34,6 +38,10 @@ class User(Base):
     )
 
     generation_history: Mapped[list["GenerationHistory"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    telegram_link_codes: Mapped[list["TelegramLinkCode"]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
     )
@@ -63,6 +71,20 @@ class RefreshToken(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     user: Mapped["User"] = relationship(back_populates="refresh_tokens")
+
+
+class TelegramLinkCode(Base):
+    __tablename__ = "telegram_link_codes"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    code_hash: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempts: Mapped[int] = mapped_column(nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    user: Mapped["User"] = relationship(back_populates="telegram_link_codes")
 
 
 class GenerationHistory(Base):

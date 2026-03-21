@@ -10,7 +10,15 @@ class ErrorResponse(BaseModel):
 
 
 class InferSchemaResponse(BaseModel):
-    schema: str = Field(..., description="Inferred JSON schema example as string.")
+    schema_text: str = Field(
+        ...,
+        alias="schema",
+        description="Inferred JSON schema example as string.",
+    )
+
+    model_config = {
+        "populate_by_name": True,
+    }
 
 
 class TotalGenerationsStatsResponse(BaseModel):

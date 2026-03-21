@@ -16,6 +16,9 @@ class OpenApiAuthTests(unittest.TestCase):
         self.assertIn("/auth/register", paths)
         self.assertIn("/auth/resend-registration-code", paths)
         self.assertIn("/generate", paths)
+        self.assertIn("/me/telegram/link-code", paths)
+        self.assertIn("/me/telegram/status", paths)
+        self.assertIn("/telegram/consume-link", paths)
 
 
 if __name__ == "__main__":

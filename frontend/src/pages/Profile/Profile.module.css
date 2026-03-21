@@ -253,6 +253,36 @@
   line-height: 1.45;
 }
 
+.telegramCard {
+  border: 1px solid var(--border-weak);
+  border-radius: 18px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--panel) 30%, transparent);
+}
+
+.telegramCodeBox {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px dashed var(--border);
+  background: color-mix(in srgb, var(--panel) 40%, transparent);
+}
+
+.telegramLink {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.code {
+  display: inline-block;
+  margin: 6px 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 @media (max-width: 900px) {
   .page {
     padding: 18px 0 28px;

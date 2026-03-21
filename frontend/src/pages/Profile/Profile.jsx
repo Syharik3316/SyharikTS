@@ -2,6 +2,11 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { listGenerationsRequest, updateProfileRequest } from '../../api/profileApi';
+import {
+  createTelegramLinkCodeRequest,
+  getTelegramStatusRequest,
+  unlinkTelegramRequest,
+} from '../../api/telegramApi';
 import styles from './Profile.module.css';
 
 export default function Profile() {
@@ -19,6 +24,11 @@ export default function Profile() {
   const [historyError, setHistoryError] = useState('');
   const [items, setItems] = useState([]);
   const historyScrollerRef = useRef(null);
+  const [tgLoading, setTgLoading] = useState(false);
+  const [tgBusy, setTgBusy] = useState(false);
+  const [tgError, setTgError] = useState('');
+  const [tgStatus, setTgStatus] = useState(null);
+  const [tgLinkCode, setTgLinkCode] = useState(null);
 
   useEffect(() => {
     if (user) {
@@ -41,8 +51,50 @@ export default function Profile() {
 
   useEffect(() => {
     loadHistory();
+    loadTelegramStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function loadTelegramStatus() {
+    setTgLoading(true);
+    setTgError('');
+    try {
+      const status = await getTelegramStatusRequest();
+      setTgStatus(status);
+    } catch (e) {
+      setTgError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTgLoading(false);
+    }
+  }
+
+  async function onGetLinkCode() {
+    setTgBusy(true);
+    setTgError('');
+    try {
+      const code = await createTelegramLinkCodeRequest();
+      setTgLinkCode(code);
+      await loadTelegramStatus();
+    } catch (e) {
+      setTgError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTgBusy(false);
+    }
+  }
+
+  async function onUnlinkTelegram() {
+    setTgBusy(true);
+    setTgError('');
+    try {
+      await unlinkTelegramRequest();
+      setTgLinkCode(null);
+      await loadTelegramStatus();
+    } catch (e) {
+      setTgError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTgBusy(false);
+    }
+  }
 
   async function onSubmit(e) {
     e.preventDefault();
@@ -148,6 +200,50 @@ export default function Profile() {
                 </button>
               </div>
             </form>
+          </div>
+
+          <div>
+            <h2 className={styles.sectionTitle}>Telegram</h2>
+            {tgError ? <p className={styles.formError}>{tgError}</p> : null}
+            {tgLoading ? <p className={styles.emptyHint}>Загрузка статуса Telegram…</p> : null}
+            {!tgLoading ? (
+              <div className={styles.telegramCard}>
+                <p className={styles.emptyHint}>
+                  {tgStatus?.is_linked
+                    ? `Привязан: ${tgStatus.telegram_first_name || ''} ${tgStatus.telegram_username ? `(@${tgStatus.telegram_username})` : ''}`
+                    : 'Telegram пока не привязан.'}
+                </p>
+                {tgStatus?.telegram_linked_at ? (
+                  <p className={styles.emptyHint}>
+                    Дата привязки: {new Date(tgStatus.telegram_linked_at).toLocaleString()}
+                  </p>
+                ) : null}
+                <div className={styles.actionsRow}>
+                  <button type="button" className={`${styles.btn} ${styles.btnPrimary}`} disabled={tgBusy} onClick={onGetLinkCode}>
+                    {tgBusy ? '…' : 'Получить код привязки'}
+                  </button>
+                  {tgStatus?.is_linked ? (
+                    <button type="button" className={styles.btn} disabled={tgBusy} onClick={onUnlinkTelegram}>
+                      Отвязать Telegram
+                    </button>
+                  ) : null}
+                </div>
+                {tgLinkCode ? (
+                  <div className={styles.telegramCodeBox}>
+                    <p className={styles.emptyHint}>Команда для бота:</p>
+                    <code className={styles.code}>{tgLinkCode.link_command}</code>
+                    <p className={styles.emptyHint}>
+                      Действителен до: {new Date(tgLinkCode.code_expires_at).toLocaleString()}
+                    </p>
+                    {tgLinkCode.bot_url ? (
+                      <a className={styles.telegramLink} href={tgLinkCode.bot_url} target="_blank" rel="noreferrer">
+                        Открыть бота
+                      </a>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
 
           <div>

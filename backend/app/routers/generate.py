@@ -115,7 +115,11 @@ async def generate(
     _user: User = Depends(get_current_user),
     db: AsyncSession | None = Depends(get_db),
     file: UploadFile = File(..., description=f"Uploaded file ({'/'.join(k.upper() for k in SUPPORTED_FILE_KINDS)})"),
-    schema: str = Form(..., description="JSON-string schema example for output objects"),
+    schema_text: str = Form(
+        ...,
+        alias="schema",
+        description="JSON-string schema example for output objects",
+    ),
 ):
     request_started = time.perf_counter()
 
@@ -130,11 +134,11 @@ async def generate(
     )
     if not file:
         raise HTTPException(status_code=400, detail="file is required")
-    if not schema or not schema.strip():
+    if not schema_text or not schema_text.strip():
         raise HTTPException(status_code=400, detail="schema is required (JSON string)")
 
     try:
-        schema_obj = json.loads(schema)
+        schema_obj = json.loads(schema_text)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid schema JSON: {e}")
 
@@ -148,7 +152,7 @@ async def generate(
         raise HTTPException(status_code=status, detail=e.as_detail())
 
     try:
-        input_fingerprint = build_input_fingerprint(file_bytes=contents, schema_text=schema, file_kind=file_kind)
+        input_fingerprint = build_input_fingerprint(file_bytes=contents, schema_text=schema_text, file_kind=file_kind)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to build input fingerprint: {e}")
     client = LLMClient()
@@ -175,7 +179,7 @@ async def generate(
                     GenerationHistory(
                         user_id=_user.id,
                         generated_ts_code=cached.generated_ts_code,
-                        schema_text=schema,
+                        schema_text=schema_text,
                         main_file_name=file.filename or "unknown",
                         input_file_base64=input_b64,
                         input_fingerprint=input_fingerprint,
@@ -305,7 +309,7 @@ async def generate(
                 GenerationHistory(
                     user_id=_user.id,
                     generated_ts_code=code,
-                    schema_text=schema,
+                    schema_text=schema_text,
                     main_file_name=file.filename or "unknown",
                     input_file_base64=input_b64,
                     input_fingerprint=input_fingerprint,

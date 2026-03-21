@@ -5,6 +5,10 @@ export type UserPublic = {
   email: string;
   login: string;
   is_email_verified: boolean;
+  telegram_chat_id?: string | null;
+  telegram_username?: string | null;
+  telegram_first_name?: string | null;
+  telegram_linked_at?: string | null;
 };
 
 export type TokenResponse = {
