@@ -1,6 +1,7 @@
 import asyncio
 import importlib.util
 import io
+import os
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -89,6 +90,26 @@ class PromptAndGuardTests(unittest.TestCase):
             "}\n"
         )
         self.assertTrue(LLMClient()._is_bad_generated_code(code, file_kind="docx", schema_obj=schema))
+
+    def test_non_stub_provider_rejects_bad_output_without_stub_fallback(self) -> None:
+        old_provider = os.environ.get("LLM_PROVIDER")
+        os.environ["LLM_PROVIDER"] = "openai_compatible"
+        try:
+            client = LLMClient()
+            with mock.patch.object(client, "_generate_via_openai_compatible", return_value="export default function () {"):
+                with self.assertRaises(ValueError):
+                    client.generate_ts_code(
+                        prompt="x",
+                        extracted_input_json={"kind": "csv", "records": []},
+                        schema_obj={"dealName": "x"},
+                        interface_ts='interface DealData { "dealName": string; }',
+                        file_kind="csv",
+                    )
+        finally:
+            if old_provider is None:
+                os.environ.pop("LLM_PROVIDER", None)
+            else:
+                os.environ["LLM_PROVIDER"] = old_provider
 
 class ParserRegressionTests(unittest.TestCase):
     @unittest.skipUnless(importlib.util.find_spec("PyPDF2") is not None, "PyPDF2 not installed")

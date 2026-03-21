@@ -121,8 +121,17 @@ async def generate(
 
     try:
         client = LLMClient()
-        # Tabular uploads keep deterministic stub path.
-        if file_kind in {"csv", "xls", "xlsx"}:
+        code = client.generate_ts_code(
+            prompt=prompt,
+            extracted_input_json=extracted_input_json,
+            schema_obj=schema_obj,
+            interface_ts=interface_ts,
+            file_kind=file_kind,
+        )
+    except Exception as e:
+        # Non-hardcoded safety net: deterministic local generator uses current schema + extracted payload.
+        try:
+            client = LLMClient()
             prev_provider = client.provider
             client.provider = "stub"
             try:
@@ -135,16 +144,8 @@ async def generate(
                 )
             finally:
                 client.provider = prev_provider
-        else:
-            code = client.generate_ts_code(
-                prompt=prompt,
-                extracted_input_json=extracted_input_json,
-                schema_obj=schema_obj,
-                interface_ts=interface_ts,
-                file_kind=file_kind,
-            )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"LLM generation failed: {e}")
+        except Exception as e2:
+            raise HTTPException(status_code=500, detail=f"LLM generation failed: {e}; fallback failed: {e2}")
 
     if not code or not code.strip():
         raise HTTPException(status_code=500, detail="LLM returned empty code")

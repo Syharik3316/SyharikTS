@@ -98,7 +98,33 @@ def infer_schema_from_extracted(file_kind: str, extracted_input_json: Any) -> Di
                 return {"text": "string", "value": "string"}
             return {"value": "string"}
 
-        first = extracted_records[0]
+        # Pick the most meaningful record instead of blindly taking the first one.
+        # This avoids noisy one-column pseudo-rows from complex DOCX tables.
+        def _is_meaningful_key(k: str) -> bool:
+            ks = str(k or "").strip()
+            if not ks:
+                return False
+            # Penalize very long "header-like" keys.
+            if len(ks) > 100:
+                return False
+            return True
+
+        best: Dict[str, Any] | None = None
+        best_score = -1
+        for rec in extracted_records:
+            if not isinstance(rec, dict) or not rec:
+                continue
+            keys = [str(k) for k in rec.keys()]
+            meaningful_keys = [k for k in keys if _is_meaningful_key(k)]
+            score = len(meaningful_keys) * 10 + len(keys)
+            # Strongly penalize single-key noisy rows.
+            if len(keys) == 1 and len(str(keys[0])) > 40:
+                score -= 25
+            if score > best_score:
+                best_score = score
+                best = rec
+
+        first = best if isinstance(best, dict) else extracted_records[0]
         if not isinstance(first, dict) or not first:
             return {"value": "string"}
 

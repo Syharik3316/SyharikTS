@@ -94,14 +94,16 @@ class LLMClient:
         interface_ts: str,
         file_kind: str,
     ) -> str:
-        def finalize_or_fallback(code: str) -> str:
+        def finalize_or_reject(code: str) -> str:
             if self._is_bad_generated_code(code, file_kind=file_kind, schema_obj=schema_obj):
-                return self._generate_stub_code(
-                    extracted_input_json=extracted_input_json,
-                    schema_obj=schema_obj,
-                    interface_ts=interface_ts,
-                    file_kind=file_kind,
-                )
+                if self.provider == "stub":
+                    return self._generate_stub_code(
+                        extracted_input_json=extracted_input_json,
+                        schema_obj=schema_obj,
+                        interface_ts=interface_ts,
+                        file_kind=file_kind,
+                    )
+                raise ValueError("LLM output rejected by shape guard; stub fallback is disabled for non-stub providers")
             return code
 
         if self.provider == "stub":
@@ -113,10 +115,10 @@ class LLMClient:
             )
 
         if self.provider == "openai_compatible":
-            return finalize_or_fallback(self._generate_via_openai_compatible(prompt))
+            return finalize_or_reject(self._generate_via_openai_compatible(prompt))
 
         if self.provider == "gigachat":
-            return finalize_or_fallback(self._generate_via_gigachat(prompt, file_kind=file_kind, schema_obj=schema_obj))
+            return finalize_or_reject(self._generate_via_gigachat(prompt, file_kind=file_kind, schema_obj=schema_obj))
 
         raise ValueError(f"Unsupported LLM_PROVIDER: {self.provider}")
 

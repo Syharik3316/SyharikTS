@@ -28,6 +28,20 @@ class FileParsingTests(unittest.TestCase):
         schema = infer_schema_from_extracted("txt", {"text": "hello"})
         self.assertEqual(schema, {"text": "string", "value": "string"})
 
+    def test_infer_schema_skips_noisy_single_long_key_record(self) -> None:
+        extracted = {
+            "kind": "docx",
+            "records": [
+                {"СВЕДЕНИЯ О ВЫГОДОПРИОБРЕТАТЕЛЕ - ЮРИДИЧЕСКОМ ЛИЦЕ И ИНОСТРАННОЙ СТРУКТУРЕ": "ООО Ромашка"},
+                {"Наименование организации": "ООО Ромашка", "ИНН/КИО": "1234567890"},
+            ],
+            "text": "",
+            "tables": [],
+        }
+        schema = infer_schema_from_extracted("docx", extracted)
+        self.assertIn("Наименование организации", schema)
+        self.assertIn("ИНН/КИО", schema)
+
     def test_extract_txt_decodes_and_truncates(self) -> None:
         payload = "Привет\r\nмир".encode("utf-8")
         upload = UploadFile(filename="hello.txt", file=io.BytesIO(payload), headers={"content-type": "text/plain"})
