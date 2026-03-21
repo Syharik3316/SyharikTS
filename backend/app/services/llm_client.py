@@ -547,17 +547,15 @@ class LLMClient:
             attempt += 1
             if attempt == 1:
                 correction = (
-                    "Previous output was invalid. Keep function signature and regenerate complete deterministic TypeScript."
+                    "Previous output invalid. Keep function signature; regenerate full deterministic TypeScript."
                 )
             elif attempt == 2:
                 correction = (
-                    "Previous output still invalid. Strict requirements: preserve schema shape exactly, especially nested arrays/objects. "
-                    "Never flatten to scalar strings."
+                    "Previous output still invalid. Preserve schema shape exactly (especially nested arrays/objects). Never flatten to scalars."
                 )
             else:
                 correction = (
-                    "Previous output rejected again. Return FULL TypeScript from start to end with strict schema-shape preservation. "
-                    "No markdown, no explanations, no placeholders."
+                    "Previous output rejected again. Return FULL TypeScript with strict schema-shape preservation. No markdown/explanations/placeholders."
                 )
             retry_payload = {
                 "model": model,
@@ -567,8 +565,8 @@ class LLMClient:
                         "content": (
                             (
                                 f"{correction} "
-                                "If this is a document format (pdf/docx/txt/rtf/etc), do NOT generate CSV parsing logic "
-                                "(no parseCsv, no split(';'), no separator-based parser).\n"
+                                "If this is a document format (pdf/docx/txt/rtf/etc), do NOT generate CSV parser logic "
+                                "(no parseCsv/split(';')/separator parser).\n"
                             )
                             + prompt
                         ),
