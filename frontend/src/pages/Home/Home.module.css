@@ -74,7 +74,7 @@
   width: min(420px, 42vw);
 }
 
-.gifPlaceholder {
+.gifTable {
   width: 100%;
   aspect-ratio: 1 / 1;
 
@@ -87,9 +87,12 @@
     rgba(29, 173, 12, 0.07) 100%
   );
 
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+  overflow: hidden;
+
+  display: block;
 
   transform: translateY(0);
   transition:
@@ -99,13 +102,31 @@
     background 0.25s ease;
 }
 
+.gifCell {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  vertical-align: middle;
+  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gifImage {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
 .gifPlaceholderText {
   font-weight: 800;
   color: var(--muted);
   letter-spacing: 0.4px;
 }
 
-.gifPlaceholder:hover {
+.gifTable:hover {
   transform: translateY(-5px);
   border-color: var(--accent-border);
   box-shadow: 0 0 0 1px rgba(29, 173, 12, 0.18),
@@ -113,7 +134,7 @@
   background: rgba(29, 173, 12, 0.10);
 }
 
-.gifPlaceholder:focus-visible {
+.gifTable:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
@@ -183,7 +204,7 @@
     align-self: center;
   }
 
-  .gifPlaceholder {
+  .gifTable {
     border-radius: 14px;
   }
 

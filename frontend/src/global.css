@@ -62,6 +62,7 @@
 html,
 body {
   height: 100%;
+  overflow-x: hidden;
 }
 
 body {
@@ -74,6 +75,13 @@ body {
   zoom: 1.06;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+@media (max-aspect-ratio: 9/16) {
+  /* На мобильных масштабирование может провоцировать горизонтальные прокрутки */
+  body {
+    zoom: 1;
+  }
 }
 
 h1,

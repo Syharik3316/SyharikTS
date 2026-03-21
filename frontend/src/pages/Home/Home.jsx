@@ -24,15 +24,15 @@ export default function Home() {
         </div>
 
         <div className={styles.right}>
-          <div
-            className={styles.gifPlaceholder}
-            aria-label="Заглушка под GIF-анимацию"
-            tabIndex={0}
-          >
-            <span className={styles.gifPlaceholderText} aria-hidden="true">
-              GIF
-            </span>
-          </div>
+          <table className={styles.gifTable} aria-label="GIF-анимация" tabIndex={0}>
+            <tbody>
+              <tr>
+                <td className={styles.gifCell}>
+                  <img className={styles.gifImage} src="/home.gif" alt="GIF" />
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
 

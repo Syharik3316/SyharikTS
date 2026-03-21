@@ -70,7 +70,9 @@ export default function Header() {
             }`}
           >
             <Link className={styles.logoLink} to="/">
-              <h1 className={styles.logo}>SyharikTS</h1>
+              <h1 className={styles.logo}>
+                <img className={styles.logoImg} src="/logo.png" alt="Логотип проекта" />
+              </h1>
             </Link>
           </div>
         </div>

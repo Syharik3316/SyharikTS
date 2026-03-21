@@ -76,14 +76,20 @@
 }
 
 .logo {
+  width: 44px;
+  height: 44px;
+  border-radius: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   margin: 0;
-  font-size: 36px;
-  font-weight: 800;
-  letter-spacing: 0.2px;
-  color: transparent;
-  background: linear-gradient(90deg, #ffffff 0%, #1dad0c 80%);
-  -webkit-background-clip: text;
-  background-clip: text;
+}
+
+.logoImg {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
 }
 
 .actions {
@@ -263,14 +269,6 @@
   transition: transform 0.18s ease;
 }
 
-.dark {
-  /* Служебный класс для CSS Modules (переключение состояния тумблера) */
-}
-
-.light {
-  /* Служебный класс для CSS Modules (переключение состояния тумблера) */
-}
-
 .dark .themeTrack {
   background: #000;
   color: #fff;
@@ -364,6 +362,15 @@
     flex-direction: column;
     align-items: center;
     padding: 20px 14px;
+  }
+
+  .logoWrap {
+    margin-left: 0;
+  }
+
+  .backLink {
+    margin-left: 0;
+    margin-right: 0;
   }
 
   .brandRow {

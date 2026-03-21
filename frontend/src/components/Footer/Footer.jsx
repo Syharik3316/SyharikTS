@@ -6,7 +6,9 @@ export default function Footer() {
     <footer className={styles.footer}>
       <div className={styles.inner}>
         <div className={styles.brandBlock}>
-          <div className={styles.logo}>SyharikTS</div>
+          <div className={styles.logo} aria-label="Логотип проекта" role="img">
+            <img className={styles.logoImg} src="/logo.png" alt="Логотип проекта" />
+          </div>
           <p className={styles.subtitle}>
             Генеративный ИИ, превращающий данные из файлов в TypeScript
           </p>

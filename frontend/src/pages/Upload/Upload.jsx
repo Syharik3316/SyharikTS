@@ -158,6 +158,31 @@ export default function Upload() {
     addFiles(e.dataTransfer.files);
   };
 
+  // Ctrl+V: если в буфере есть файлы, добавляем их как будто это drop.
+  useEffect(() => {
+    const onPaste = (e) => {
+      if (mode !== MODES.generation) return;
+      const clipboardData = e.clipboardData;
+      if (!clipboardData || !clipboardData.items) return;
+
+      const nextFiles = [];
+      for (const item of Array.from(clipboardData.items || [])) {
+        if (item && item.kind === 'file') {
+          const f = item.getAsFile();
+          if (f) nextFiles.push(f);
+        }
+      }
+
+      if (!nextFiles.length) return;
+      e.preventDefault();
+      addFiles(nextFiles);
+      setIsDragOver(false);
+    };
+
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  }, [mode, addFiles]);
+
   function handleApiError(err) {
     if (err instanceof ApiError) {
       if (err.status === 401) logout();
