@@ -19,8 +19,18 @@ class _ScalarResult:
 
 
 class _FakeDb:
+    def __init__(self):
+        self._idx = 0
+
     async def execute(self, _query):
-        return _ScalarResult(42)
+        self._idx += 1
+        if self._idx == 1:
+            return _ScalarResult(42)
+        if self._idx == 2:
+            return _ScalarResult(12)
+        if self._idx == 3:
+            return _ScalarResult(100.0)
+        return _ScalarResult(0)
 
 
 async def _override_db():
@@ -69,6 +79,7 @@ class StatsAndObservabilityTests(unittest.TestCase):
         try:
             app = create_app()
             app.dependency_overrides[get_current_user] = _override_current_user
+            app.dependency_overrides[get_db] = _override_db
             with TestClient(app) as client:
                 response = client.get("/observability/summary")
             self.assertEqual(response.status_code, 200)
@@ -76,6 +87,10 @@ class StatsAndObservabilityTests(unittest.TestCase):
             self.assertTrue(body["langfuse_enabled"])
             self.assertNotIn("langfuse_secret_key", body)
             self.assertNotIn("langfuse_public_key", body)
+            self.assertEqual(body["generation_cache_total_requests"], 42)
+            self.assertEqual(body["generation_cache_hit_count"], 12)
+            self.assertAlmostEqual(body["generation_cache_hit_ratio"], 12 / 42)
+            self.assertEqual(body["generation_cache_saved_total_tokens_estimate"], 1200)
         finally:
             for key, value in saved.items():
                 if value is None:

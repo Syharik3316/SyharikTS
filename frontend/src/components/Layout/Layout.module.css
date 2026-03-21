@@ -60,6 +60,12 @@
   z-index: 1;
 }
 
+@media (max-width: 900px) {
+  .container {
+    padding: 30px 12px 16px;
+  }
+}
+
 @media (max-aspect-ratio: 9/16) {
   .container {
     padding: 34px 14px 18px;

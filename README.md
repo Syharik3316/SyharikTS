@@ -62,6 +62,7 @@ Frontend по умолчанию: `http://localhost:5173`.
   - [`backend/migrations/002_generation_history.sql`](backend/migrations/002_generation_history.sql) — история генераций (TS-код + схема)
   - [`backend/migrations/003_generation_history_input_base64.sql`](backend/migrations/003_generation_history_input_base64.sql) — опционально сохраняемый исходный файл (base64) для проверки TS из истории
   - [`backend/migrations/004_generation_history_tokens.sql`](backend/migrations/004_generation_history_tokens.sql) — токены (`prompt/completion/total`) по каждому запросу генерации
+  - [`backend/migrations/005_generation_history_cache_fingerprints.sql`](backend/migrations/005_generation_history_cache_fingerprints.sql) — fingerprint-ключи и поля кэша генераций
 - На Ubuntu после создания БД (см. `scripts/init_syharikts_db.sh`) примените миграции:
   ```bash
   export DATABASE_URL='postgresql+asyncpg://USER:PASS@127.0.0.1:5432/syharikts'
@@ -108,6 +109,16 @@ Frontend по умолчанию: `http://localhost:5173`.
 - Ответ:
   - `GenerateResponse`:
     - `code`: TypeScript строка
+
+Оптимизация токенов:
+- backend вычисляет fingerprint входа (`file bytes + schema + file_kind`) и fingerprint генератора (`provider + model + PROMPT_VERSION`);
+- если найдена идентичная запись в истории (глобально), возвращается сохранённый `code` без вызова LLM;
+- в историю текущего пользователя добавляется audit-запись cache-hit (токены = `0`), без раскрытия чужих метаданных.
+- в `GET /observability/summary` доступны метрики эффекта кэша:
+  - `generation_cache_total_requests`
+  - `generation_cache_hit_count`
+  - `generation_cache_hit_ratio`
+  - `generation_cache_saved_total_tokens_estimate` (оценка экономии: `cache_hits * avg(total_tokens на cache_miss)`).
 
 Ошибки:
 - 401: нет или невалидный Bearer-токен
@@ -204,6 +215,7 @@ curl -X POST "http://localhost:8000/infer-schema" \
 ### LLM
 
 - `LLM_PROVIDER` (`stub`, `openai_compatible`, `gigachat`)
+- `PROMPT_VERSION` (версия шаблона/логики генерации для безопасного cache busting)
 - `OPENAI_COMPAT_BASE_URL`
 - `OPENAI_COMPAT_API_KEY`
 - `OPENAI_COMPAT_MODEL`

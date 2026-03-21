@@ -656,6 +656,56 @@
   font-size: 15px;
 }
 
+@media (max-width: 900px) {
+  .page {
+    margin-top: -14px;
+  }
+
+  .workspace {
+    padding: 2px 0 14px;
+    min-height: min(78vh, 720px);
+  }
+
+  .workspaceSplit {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+    max-width: min(100%, 760px);
+  }
+
+  .glassPanel {
+    height: auto;
+    min-height: 56vh;
+    max-height: none;
+    padding: 12px 14px 14px;
+    border-radius: 18px;
+  }
+
+  .glassPanelCompact {
+    width: 100%;
+    max-width: none;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .modeBanner {
+    margin-left: 0;
+    width: 100%;
+    max-width: none;
+    text-align: left;
+  }
+
+  .dropZone {
+    min-height: 160px;
+  }
+
+  .resultPanel {
+    width: 100%;
+    max-width: none;
+    flex: 1 1 auto;
+  }
+}
+
 @media (max-aspect-ratio: 9/16) {
   .page {
     margin-top: -18px;

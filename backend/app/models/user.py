@@ -81,6 +81,14 @@ class GenerationHistory(Base):
     schema_text: Mapped[str] = mapped_column(Text, nullable=False)
     main_file_name: Mapped[str] = mapped_column(String(512), nullable=False)
     input_file_base64: Mapped[str | None] = mapped_column(Text, nullable=True)
+    input_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    generator_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    cache_hit: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    cache_source_generation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("generation_history.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     prompt_tokens: Mapped[int | None] = mapped_column(nullable=True)
     completion_tokens: Mapped[int | None] = mapped_column(nullable=True)
     total_tokens: Mapped[int | None] = mapped_column(nullable=True)

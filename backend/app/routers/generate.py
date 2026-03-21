@@ -7,13 +7,15 @@ from functools import partial
 from typing import Any
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from starlette.concurrency import run_in_threadpool
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies.auth import get_current_user
 from app.models.schemas import GenerateResponse
 from app.models.user import GenerationHistory, User
 from app.db.session import get_db
-from app.services.file_parser import ParseFileError, SUPPORTED_FILE_KINDS, extract_extracted_input_from_bytes
+from app.services.file_parser import ParseFileError, SUPPORTED_FILE_KINDS, detect_file_kind, extract_extracted_input_from_bytes
+from app.services.generation_cache import build_generator_fingerprint, build_input_fingerprint
 from app.services.langfuse_client import LangfuseTrace, build_safe_prompt_preview
 from app.services.prompt_builder import build_generation_prompt, build_interface_ts
 from app.services.llm_client import LLMClient
@@ -56,6 +58,27 @@ def _estimate_tokens_from_text(text: str) -> int:
     # Rough cross-provider estimate: ~4 chars per token for mixed text/code payloads.
     compact = text or ""
     return max(1, (len(compact) + 3) // 4)
+
+
+async def _find_cached_generation(
+    db: AsyncSession,
+    *,
+    input_fingerprint: str,
+    generator_fingerprint: str,
+) -> GenerationHistory | None:
+    result = await db.execute(
+        select(GenerationHistory)
+        .where(GenerationHistory.input_fingerprint == input_fingerprint)
+        .where(GenerationHistory.generator_fingerprint == generator_fingerprint)
+        .order_by(GenerationHistory.created_at.desc())
+        .limit(1)
+    )
+    if hasattr(result, "scalars"):
+        return result.scalars().first()
+    if hasattr(result, "scalar"):
+        scalar_val = result.scalar()
+        return scalar_val if isinstance(scalar_val, GenerationHistory) else None
+    return None
 
 
 def _validate_generated_code_shape(*, code: str, schema_obj: Any, file_kind: str) -> None:
@@ -119,6 +142,64 @@ async def generate(
     with trace.span("read_uploaded_file"):
         contents = await file.read()
     try:
+        file_kind = detect_file_kind(file.filename, file.content_type)
+    except ParseFileError as e:
+        status = 415 if e.code == "UNSUPPORTED_FILE_TYPE" else 400
+        raise HTTPException(status_code=status, detail=e.as_detail())
+
+    try:
+        input_fingerprint = build_input_fingerprint(file_bytes=contents, schema_text=schema, file_kind=file_kind)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to build input fingerprint: {e}")
+    client = LLMClient()
+    generator_fingerprint = build_generator_fingerprint(provider=client.provider)
+    llm_duration_ms = 0
+    parse_duration_ms = 0
+
+    await _fail_if_disconnected()
+    if db is not None:
+        with trace.span(
+            "cache_lookup",
+            metadata={"file_kind": file_kind, "provider": client.provider},
+        ):
+            cached = await _find_cached_generation(
+                db,
+                input_fingerprint=input_fingerprint,
+                generator_fingerprint=generator_fingerprint,
+            )
+        if cached is not None and cached.generated_ts_code and cached.generated_ts_code.strip():
+            max_store = _read_generation_history_max_input_bytes()
+            input_b64 = base64.b64encode(contents).decode("ascii") if len(contents) <= max_store else None
+            with trace.span("persist_cache_hit_history"):
+                db.add(
+                    GenerationHistory(
+                        user_id=_user.id,
+                        generated_ts_code=cached.generated_ts_code,
+                        schema_text=schema,
+                        main_file_name=file.filename or "unknown",
+                        input_file_base64=input_b64,
+                        input_fingerprint=input_fingerprint,
+                        generator_fingerprint=generator_fingerprint,
+                        cache_hit=True,
+                        cache_source_generation_id=cached.id,
+                        prompt_tokens=0,
+                        completion_tokens=0,
+                        total_tokens=0,
+                    )
+                )
+                await db.commit()
+            total_duration_ms = int((time.perf_counter() - request_started) * 1000)
+            logger.info(
+                "generate completed trace_id=%s file_kind=%s cache_hit=true parse_ms=%d llm_ms=%d total_ms=%d",
+                trace.trace_id,
+                file_kind,
+                parse_duration_ms,
+                llm_duration_ms,
+                total_duration_ms,
+            )
+            return GenerateResponse(code=cached.generated_ts_code)
+
+    try:
         parse_max_rows = _read_optional_positive_int("PARSE_MAX_ROWS")
         parse_max_text_chars = _read_optional_positive_int("PARSE_MAX_TEXT_CHARS")
         parse_started = time.perf_counter()
@@ -158,7 +239,6 @@ async def generate(
 
     await _fail_if_disconnected()
     try:
-        client = LLMClient()
         client._active_trace = trace
         llm_started = time.perf_counter()
         with trace.span(
@@ -228,6 +308,9 @@ async def generate(
                     schema_text=schema,
                     main_file_name=file.filename or "unknown",
                     input_file_base64=input_b64,
+                    input_fingerprint=input_fingerprint,
+                    generator_fingerprint=generator_fingerprint,
+                    cache_hit=False,
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
                     total_tokens=total_tokens,
@@ -237,7 +320,7 @@ async def generate(
 
     total_duration_ms = int((time.perf_counter() - request_started) * 1000)
     logger.info(
-        "generate completed trace_id=%s file_kind=%s parse_ms=%d llm_ms=%d total_ms=%d",
+        "generate completed trace_id=%s file_kind=%s cache_hit=false parse_ms=%d llm_ms=%d total_ms=%d",
         trace.trace_id,
         file_kind,
         parse_duration_ms,

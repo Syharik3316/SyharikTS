@@ -24,4 +24,8 @@ class ObservabilitySummaryResponse(BaseModel):
     langfuse_release: str
     llm_provider: str
     database_configured: bool
+    generation_cache_total_requests: int = Field(..., ge=0)
+    generation_cache_hit_count: int = Field(..., ge=0)
+    generation_cache_hit_ratio: float = Field(..., ge=0.0, le=1.0)
+    generation_cache_saved_total_tokens_estimate: int = Field(..., ge=0)
 
