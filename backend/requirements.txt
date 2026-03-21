@@ -24,3 +24,6 @@ pytesseract
 
 requests
 
+sqlalchemy[asyncio]
+asyncpg
+

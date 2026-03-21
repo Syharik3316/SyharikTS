@@ -1,9 +1,10 @@
+# PostgreSQL is external (not defined here). С network_mode: host backend делит
+# сеть с хостом — в DATABASE_URL используйте 127.0.0.1:5432. Nginx обращается к 127.0.0.1:8000.
 services:
   backend:
     build:
       context: ./backend
-    ports:
-      - "8000:8000"
+    network_mode: host
     environment:
       - LLM_PROVIDER=${LLM_PROVIDER:-stub}
       - OPENAI_COMPAT_BASE_URL=${OPENAI_COMPAT_BASE_URL:-}
@@ -16,8 +17,9 @@ services:
       - GIGACHAT_VERIFY_TLS=${GIGACHAT_VERIFY_TLS:-false}
       - GIGACHAT_MAX_TOKENS=${GIGACHAT_MAX_TOKENS:-1400}
       - GIGACHAT_TIMEOUT_SECONDS=${GIGACHAT_TIMEOUT_SECONDS:-90}
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://127.0.0.1:11434}
       - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-*}
+      - DATABASE_URL=${DATABASE_URL:-}
     volumes:
       - ./backend:/app
 
