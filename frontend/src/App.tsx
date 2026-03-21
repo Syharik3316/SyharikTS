@@ -10,6 +10,7 @@ import ResetPassword from "./pages/ResetPassword/ResetPassword.jsx";
 import Upload from "./pages/Upload/Upload.jsx";
 import Profile from "./pages/Profile/Profile.jsx";
 import GenerationDetail from "./pages/GenerationDetail/GenerationDetail.jsx";
+import TechInfo from "./pages/TechInfo/TechInfo.jsx";
 
 function GuestRoute({ children }: { children: React.ReactNode }) {
   const { user, ready, bootstrapping } = useAuth();
@@ -65,6 +66,14 @@ export default function App() {
         element={
           <PrivateRoute>
             <GenerationDetail />
+          </PrivateRoute>
+        }
+      />
+      <Route
+        path="/profile/tech"
+        element={
+          <PrivateRoute>
+            <TechInfo />
           </PrivateRoute>
         }
       />

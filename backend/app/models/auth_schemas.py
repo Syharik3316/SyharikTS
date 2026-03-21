@@ -122,3 +122,20 @@ class GenerationCheckInputResponse(BaseModel):
     """Base64 of the original uploaded file when stored (see GENERATION_HISTORY_MAX_INPUT_BYTES)."""
 
     input_base64: str | None = None
+
+
+class TokenUsageItem(BaseModel):
+    id: uuid.UUID
+    created_at: datetime
+    main_file_name: str
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+
+class TokenUsageSummaryResponse(BaseModel):
+    total_prompt_tokens: int
+    total_completion_tokens: int
+    total_tokens: int
+    requests_count: int
+    requests: list[TokenUsageItem]

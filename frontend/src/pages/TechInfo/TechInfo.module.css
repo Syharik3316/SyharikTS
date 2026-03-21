@@ -1,0 +1,127 @@
+.page {
+  width: 100%;
+  padding: 24px 0 40px;
+  box-sizing: border-box;
+}
+
+.card {
+  width: min(100%, 860px);
+  margin: 0 auto;
+  padding: 24px 22px;
+  border-radius: 24px;
+  border: 1px solid var(--border-weak);
+  background: color-mix(in srgb, var(--panel) 42%, transparent);
+}
+
+.title {
+  margin: 0 0 16px;
+  color: var(--text);
+}
+
+.hint {
+  margin: 0;
+  color: var(--muted);
+}
+
+.error {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: color-mix(in srgb, #ff6b6b 12%, transparent);
+  border: 1px solid rgba(255, 107, 107, 0.35);
+  color: #ff6b6b;
+  font-weight: 600;
+}
+
+.subtitle {
+  margin: 18px 0 10px;
+  color: var(--text);
+  font-size: 18px;
+}
+
+.kpiGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.kpiCard {
+  border: 1px solid var(--border-weak);
+  border-radius: 14px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--panel) 30%, transparent);
+}
+
+.kpiLabel {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.kpiValue {
+  margin: 6px 0 0;
+  color: var(--text);
+  font-size: 24px;
+  font-weight: 800;
+}
+
+.chartList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.chartItem {
+  border: 1px solid var(--border-weak);
+  border-radius: 14px;
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--panel) 30%, transparent);
+}
+
+.chartMeta {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.fileName {
+  max-width: 40%;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.barWrap {
+  margin-top: 8px;
+  height: 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel) 60%, transparent);
+  overflow: hidden;
+}
+
+.bar {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 65%, #9cff6c));
+}
+
+.tokensLine {
+  margin-top: 8px;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  color: var(--text);
+  font-size: 13px;
+}
+
+@media (max-width: 760px) {
+  .kpiGrid {
+    grid-template-columns: 1fr;
+  }
+}

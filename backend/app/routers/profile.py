@@ -1,7 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,6 +12,8 @@ from app.models.auth_schemas import (
     GenerationHistoryDetail,
     GenerationHistoryItem,
     ProfileUpdateRequest,
+    TokenUsageItem,
+    TokenUsageSummaryResponse,
     UserPublic,
 )
 from app.models.user import GenerationHistory, RefreshToken, User
@@ -120,5 +122,50 @@ async def get_generation_detail(
         created_at=row.created_at,
         main_file_name=row.main_file_name,
         generated_ts_code=row.generated_ts_code,
+    )
+
+
+@router.get("/me/token-usage", response_model=TokenUsageSummaryResponse)
+async def get_my_token_usage(
+    db: AsyncSession | None = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    if db is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database is not configured")
+
+    agg = await db.execute(
+        select(
+            func.coalesce(func.sum(GenerationHistory.prompt_tokens), 0),
+            func.coalesce(func.sum(GenerationHistory.completion_tokens), 0),
+            func.coalesce(func.sum(GenerationHistory.total_tokens), 0),
+            func.count(GenerationHistory.id),
+        ).where(GenerationHistory.user_id == user.id)
+    )
+    total_prompt, total_completion, total_all, requests_count = agg.one()
+
+    rows_res = await db.execute(
+        select(GenerationHistory)
+        .where(GenerationHistory.user_id == user.id)
+        .order_by(GenerationHistory.created_at.desc())
+        .limit(50)
+    )
+    rows = rows_res.scalars().all()
+    requests = [
+        TokenUsageItem(
+            id=row.id,
+            created_at=row.created_at,
+            main_file_name=row.main_file_name,
+            prompt_tokens=int(row.prompt_tokens or 0),
+            completion_tokens=int(row.completion_tokens or 0),
+            total_tokens=int(row.total_tokens or 0),
+        )
+        for row in rows
+    ]
+    return TokenUsageSummaryResponse(
+        total_prompt_tokens=int(total_prompt or 0),
+        total_completion_tokens=int(total_completion or 0),
+        total_tokens=int(total_all or 0),
+        requests_count=int(requests_count or 0),
+        requests=requests,
     )
 

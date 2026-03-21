@@ -10,6 +10,7 @@ from app.models.schemas import GenerateResponse
 from app.models.user import GenerationHistory, User
 from app.db.session import get_db
 from app.services.file_parser import ParseFileError, SUPPORTED_FILE_KINDS, extract_extracted_input_from_bytes
+from app.services.langfuse_client import LangfuseTrace, build_safe_prompt_preview
 from app.services.prompt_builder import build_generation_prompt, build_interface_ts
 from app.services.llm_client import LLMClient
 
@@ -81,6 +82,11 @@ async def generate(
     file: UploadFile = File(..., description=f"Uploaded file ({'/'.join(k.upper() for k in SUPPORTED_FILE_KINDS)})"),
     schema: str = Form(..., description="JSON-string schema example for output objects"),
 ):
+    trace = LangfuseTrace(
+        name="generate_request",
+        user_id=str(_user.id),
+        metadata={"route": "/generate", "filename": file.filename or "unknown"},
+    )
     if not file:
         raise HTTPException(status_code=400, detail="file is required")
     if not schema or not schema.strip():
@@ -91,17 +97,22 @@ async def generate(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid schema JSON: {e}")
 
-    contents = await file.read()
+    with trace.span("read_uploaded_file"):
+        contents = await file.read()
     try:
         parse_max_rows = _read_optional_positive_int("PARSE_MAX_ROWS")
         parse_max_text_chars = _read_optional_positive_int("PARSE_MAX_TEXT_CHARS")
-        file_kind, extracted_input_json = extract_extracted_input_from_bytes(
-            file.filename,
-            file.content_type,
-            contents,
-            max_rows=parse_max_rows,
-            max_text_chars=parse_max_text_chars,
-        )
+        with trace.span(
+            "parse_input_file",
+            metadata={"content_type": file.content_type, "size_bytes": len(contents)},
+        ):
+            file_kind, extracted_input_json = extract_extracted_input_from_bytes(
+                file.filename,
+                file.content_type,
+                contents,
+                max_rows=parse_max_rows,
+                max_text_chars=parse_max_text_chars,
+            )
     except ParseFileError as e:
         status = 415 if e.code == "UNSUPPORTED_FILE_TYPE" else 429 if e.code == "GIGACHAT_RATE_LIMIT" else 400
         raise HTTPException(status_code=status, detail=e.as_detail())
@@ -111,47 +122,62 @@ async def generate(
         raise HTTPException(status_code=400, detail=f"Failed to parse uploaded file: {e}")
 
     try:
-        interface_ts = build_interface_ts(schema_obj)
+        with trace.span("build_interface_ts"):
+            interface_ts = build_interface_ts(schema_obj)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid schema: {e}")
 
-    prompt = build_generation_prompt(
-        extracted_input_json, schema_obj, interface_ts=interface_ts, file_kind=file_kind
-    )
+    with trace.span("build_generation_prompt", metadata={"file_kind": file_kind}):
+        prompt = build_generation_prompt(
+            extracted_input_json, schema_obj, interface_ts=interface_ts, file_kind=file_kind
+        )
 
     try:
         client = LLMClient()
-        code = client.generate_ts_code(
-            prompt=prompt,
-            extracted_input_json=extracted_input_json,
-            schema_obj=schema_obj,
-            interface_ts=interface_ts,
-            file_kind=file_kind,
-        )
+        client._active_trace = trace
+        with trace.span(
+            "generate_typescript",
+            input_data=build_safe_prompt_preview(prompt),
+            metadata={"provider": client.provider, "file_kind": file_kind},
+        ):
+            code = client.generate_ts_code(
+                prompt=prompt,
+                extracted_input_json=extracted_input_json,
+                schema_obj=schema_obj,
+                interface_ts=interface_ts,
+                file_kind=file_kind,
+            )
     except Exception as e:
         # Non-hardcoded safety net: deterministic local generator uses current schema + extracted payload.
         try:
             client = LLMClient()
+            client._active_trace = trace
             prev_provider = client.provider
             client.provider = "stub"
             try:
-                code = client.generate_ts_code(
-                    prompt=prompt,
-                    extracted_input_json=extracted_input_json,
-                    schema_obj=schema_obj,
-                    interface_ts=interface_ts,
-                    file_kind=file_kind,
-                )
+                with trace.span("generate_typescript_stub_fallback"):
+                    code = client.generate_ts_code(
+                        prompt=prompt,
+                        extracted_input_json=extracted_input_json,
+                        schema_obj=schema_obj,
+                        interface_ts=interface_ts,
+                        file_kind=file_kind,
+                    )
             finally:
                 client.provider = prev_provider
         except Exception as e2:
             raise HTTPException(status_code=500, detail=f"LLM generation failed: {e}; fallback failed: {e2}")
+    usage = getattr(client, "last_usage", {}) or {}
+    prompt_tokens = int(usage.get("prompt_tokens") or 0)
+    completion_tokens = int(usage.get("completion_tokens") or 0)
+    total_tokens = int(usage.get("total_tokens") or (prompt_tokens + completion_tokens))
 
     if not code or not code.strip():
         raise HTTPException(status_code=500, detail="LLM returned empty code")
 
     try:
-        _validate_generated_code_shape(code=code, schema_obj=schema_obj, file_kind=file_kind)
+        with trace.span("shape_gate_validation"):
+            _validate_generated_code_shape(code=code, schema_obj=schema_obj, file_kind=file_kind)
     except ValueError as e:
         raise HTTPException(status_code=500, detail=f"Generated code rejected by shape gate: {e}")
 
@@ -159,16 +185,20 @@ async def generate(
     input_b64 = base64.b64encode(contents).decode("ascii") if len(contents) <= max_store else None
 
     if db is not None:
-        db.add(
-            GenerationHistory(
-                user_id=_user.id,
-                generated_ts_code=code,
-                schema_text=schema,
-                main_file_name=file.filename or "unknown",
-                input_file_base64=input_b64,
+        with trace.span("persist_generation_history"):
+            db.add(
+                GenerationHistory(
+                    user_id=_user.id,
+                    generated_ts_code=code,
+                    schema_text=schema,
+                    main_file_name=file.filename or "unknown",
+                    input_file_base64=input_b64,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                )
             )
-        )
-        await db.commit()
+            await db.commit()
 
     return GenerateResponse(code=code)
 

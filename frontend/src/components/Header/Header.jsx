@@ -14,7 +14,8 @@ export default function Header() {
     pathname === '/verify-email' ||
     pathname === '/reset-password' ||
     pathname === '/profile' ||
-    pathname.startsWith('/profile/generations');
+    pathname.startsWith('/profile/generations') ||
+    pathname.startsWith('/profile/tech');
   const { theme, setTheme } = useTheme();
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);

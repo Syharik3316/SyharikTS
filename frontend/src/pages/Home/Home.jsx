@@ -1,6 +1,7 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import { getTotalGenerationsStats } from '../../api/systemApi';
 import styles from './Home.module.css';
 
 export default function Home() {
@@ -8,6 +9,39 @@ export default function Home() {
   const sessionReady = ready && !bootstrapping;
   const ctaTo = sessionReady && user ? '/upload' : '/login';
   const ctaLabel = sessionReady && user ? 'Перейти к генерации' : 'Войти и начать';
+  const [totalGenerations, setTotalGenerations] = React.useState(null);
+  const [statsLoading, setStatsLoading] = React.useState(false);
+  const [statsError, setStatsError] = React.useState('');
+
+  React.useEffect(() => {
+    let cancelled = false;
+    if (!(sessionReady && user)) {
+      setTotalGenerations(null);
+      setStatsError('');
+      setStatsLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+    (async () => {
+      setStatsLoading(true);
+      setStatsError('');
+      try {
+        const data = await getTotalGenerationsStats();
+        if (!cancelled) setTotalGenerations(data.total_generations_all_time);
+      } catch (e) {
+        if (!cancelled) {
+          setTotalGenerations(null);
+          setStatsError(e instanceof Error ? e.message : String(e));
+        }
+      } finally {
+        if (!cancelled) setStatsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionReady, user]);
 
   return (
     <section className={styles.home} aria-label="Главная страница">
@@ -40,6 +74,15 @@ export default function Home() {
         className={styles.features}
         aria-labelledby="home-features-title"
       >
+        {sessionReady && user ? (
+          <div className={styles.statWidget} aria-live="polite">
+            <p className={styles.statLabel}>Генераций за всё время</p>
+            <p className={styles.statValue}>
+              {statsLoading ? '…' : totalGenerations ?? '—'}
+            </p>
+            {statsError ? <p className={styles.statHint}>Не удалось обновить статистику</p> : null}
+          </div>
+        ) : null}
         <h2 id="home-features-title" className={styles.featuresTitle}>
           Наши возможности
         </h2>

@@ -73,6 +73,15 @@ export default function Profile() {
     <section className={styles.page} aria-label="Профиль пользователя">
       <div className={styles.card}>
         <h1 className={styles.title}>Профиль</h1>
+        <div className={styles.actionsRow}>
+          <button
+            type="button"
+            className={styles.btn}
+            onClick={() => navigate('/profile/tech')}
+          >
+            Техническая информация
+          </button>
+        </div>
 
         <div className={styles.grid}>
           <div>

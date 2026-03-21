@@ -11,7 +11,9 @@ from app.db import check_connection, database_url, dispose_engine
 from app.routers.auth import router as auth_router
 from app.routers.generate import router as generate_router
 from app.routers.infer_schema import router as infer_schema_router
+from app.routers.observability import router as observability_router
 from app.routers.profile import router as profile_router
+from app.routers.stats import router as stats_router
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +71,8 @@ def create_app() -> FastAPI:
     app.include_router(generate_router)
     app.include_router(infer_schema_router)
     app.include_router(profile_router)
+    app.include_router(observability_router)
+    app.include_router(stats_router)
     return app
 
 

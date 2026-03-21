@@ -36,6 +36,8 @@ export default defineConfig(({ mode }) => {
         "/generate": apiProxy,
         "/infer-schema": apiProxy,
         "/health": apiProxy,
+        "/stats": apiProxy,
+        "/observability": apiProxy,
         "/profile": {
           target: proxyTarget,
           changeOrigin: true,

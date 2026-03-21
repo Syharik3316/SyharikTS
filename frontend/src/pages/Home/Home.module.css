@@ -147,6 +147,36 @@
   box-sizing: border-box;
 }
 
+.statWidget {
+  margin: 0 auto 18px;
+  max-width: 360px;
+  border: 1px solid var(--border-weak);
+  border-radius: 18px;
+  padding: 14px 16px;
+  background: color-mix(in srgb, var(--panel) 38%, transparent);
+  text-align: center;
+}
+
+.statLabel {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.statValue {
+  margin: 6px 0 0;
+  color: var(--text);
+  font-size: 32px;
+  font-weight: 800;
+}
+
+.statHint {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .featuresTitle {
   margin: 0 0 28px;
   font-size: 34px;

@@ -23,6 +23,7 @@ Pillow
 pytesseract
 
 requests
+langfuse
 
 sqlalchemy[asyncio]
 asyncpg

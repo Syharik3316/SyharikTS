@@ -8,6 +8,7 @@ import requests
 import urllib3
 from urllib3.exceptions import InsecureRequestWarning
 
+from app.services.langfuse_client import LangfuseTrace, build_safe_prompt_preview
 from app.utils.helpers import (
     extract_typescript_code,
     looks_like_incomplete_typescript,
@@ -84,6 +85,8 @@ def _collect_schema_keys(schema_obj: Any) -> set[str]:
 class LLMClient:
     def __init__(self) -> None:
         self.provider = (os.getenv("LLM_PROVIDER", "stub") or "stub").strip().lower()
+        self._active_trace: LangfuseTrace | None = None
+        self.last_usage: Dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     def generate_ts_code(
         self,
@@ -94,6 +97,8 @@ class LLMClient:
         interface_ts: str,
         file_kind: str,
     ) -> str:
+        trace = self._active_trace
+        self.last_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         def finalize_or_reject(code: str) -> str:
             if self._is_bad_generated_code(code, file_kind=file_kind, schema_obj=schema_obj):
                 if self.provider == "stub":
@@ -411,6 +416,7 @@ class LLMClient:
         )
 
     def _generate_via_openai_compatible(self, prompt: str) -> str:
+        trace = self._active_trace
         from langchain_openai import ChatOpenAI
         from langchain_core.messages import HumanMessage
 
@@ -429,10 +435,14 @@ class LLMClient:
             model=model,
             temperature=0,
         )
-        msg = llm.invoke([HumanMessage(content=prompt)])
+        with (trace.span("llm.openai_compatible", metadata={"provider": "openai_compatible", "model": model})
+              if trace else _noop_context()):
+            msg = llm.invoke([HumanMessage(content=prompt)])
+        self.last_usage = self._extract_usage_from_langchain_message(msg)
         return extract_typescript_code(msg.content or "")
 
     def _generate_via_gigachat(self, prompt: str, *, file_kind: str, schema_obj: Any) -> str:
+        trace = self._active_trace
         """
         GigaChat via Authorization key (OAuth) + REST chat completions.
 
@@ -479,7 +489,15 @@ class LLMClient:
             "Authorization": auth_header,
         }
 
-        resp = requests.post(chat_url, headers=headers, json=payload, timeout=timeout_sec, verify=verify_tls)
+        if trace:
+            with trace.span(
+                "llm.gigachat.primary_call",
+                input_data=build_safe_prompt_preview(prompt),
+                metadata={"provider": "gigachat", "model": model, "file_kind": file_kind},
+            ):
+                resp = requests.post(chat_url, headers=headers, json=payload, timeout=timeout_sec, verify=verify_tls)
+        else:
+            resp = requests.post(chat_url, headers=headers, json=payload, timeout=timeout_sec, verify=verify_tls)
         if resp.status_code != 200:
             try:
                 body = resp.json()
@@ -491,6 +509,7 @@ class LLMClient:
             raise RuntimeError(f"GigaChat chat error {resp.status_code}: {msg or resp.text[:300]}")
 
         data = resp.json()
+        self.last_usage = self._extract_usage_from_payload(data)
         content = ""
         if isinstance(data, dict):
             choices = data.get("choices") or []
@@ -548,13 +567,26 @@ class LLMClient:
             }
             if max_tokens and max_tokens > 0:
                 retry_payload["max_tokens"] = max_tokens
-            retry_resp = requests.post(
-                chat_url,
-                headers=headers,
-                json=retry_payload,
-                timeout=max(timeout_sec, 120),
-                verify=verify_tls,
-            )
+            if trace:
+                with trace.span(
+                    "llm.gigachat.retry_call",
+                    metadata={"attempt": attempt, "provider": "gigachat", "model": model},
+                ):
+                    retry_resp = requests.post(
+                        chat_url,
+                        headers=headers,
+                        json=retry_payload,
+                        timeout=max(timeout_sec, 120),
+                        verify=verify_tls,
+                    )
+            else:
+                retry_resp = requests.post(
+                    chat_url,
+                    headers=headers,
+                    json=retry_payload,
+                    timeout=max(timeout_sec, 120),
+                    verify=verify_tls,
+                )
             if retry_resp.status_code == 200:
                 retry_data = retry_resp.json()
                 retry_content = ""
@@ -805,4 +837,33 @@ class LLMClient:
 
         self.__class__._gigachat_token_cache = (access_token, expires_at_ts)
         return access_token, expires_at_ts
+
+    def _extract_usage_from_payload(self, payload: Any) -> Dict[str, int]:
+        if not isinstance(payload, dict):
+            return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        usage = payload.get("usage") or {}
+        if not isinstance(usage, dict):
+            return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        prompt = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
+        completion = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
+        total = int(usage.get("total_tokens") or (prompt + completion))
+        return {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": total}
+
+    def _extract_usage_from_langchain_message(self, message: Any) -> Dict[str, int]:
+        meta = getattr(message, "response_metadata", {}) or {}
+        usage = meta.get("token_usage") or meta.get("usage") or {}
+        if not isinstance(usage, dict):
+            usage = {}
+        prompt = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
+        completion = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
+        total = int(usage.get("total_tokens") or (prompt + completion))
+        return {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": total}
+
+
+class _noop_context:
+    def __enter__(self):
+        return None
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
 

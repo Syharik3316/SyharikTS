@@ -53,14 +53,15 @@ npm run dev
 
 Frontend по умолчанию: `http://localhost:5173`.
 
-**Прокси:** при пустом `VITE_API_BASE_URL` dev-сервер Vite перенаправляет `/auth`, `/me`, `/generate`, `/infer-schema`, `/health` и `PATCH /profile` на uvicorn (по умолчанию `http://127.0.0.1:8000`, переопределение: `DEV_API_PROXY_TARGET` в `.env`). На продакшене nginx должен проксировать те же префиксы; образец — [`test_files/nginx.config`](test_files/nginx.config) (`/me` и отдельно `/profile` для PATCH, иначе история генераций получит HTML вместо JSON).
+**Прокси:** при пустом `VITE_API_BASE_URL` dev-сервер Vite перенаправляет `/auth`, `/me`, `/generate`, `/infer-schema`, `/health`, `/stats`, `/observability` и `PATCH /profile` на uvicorn (по умолчанию `http://127.0.0.1:8000`, переопределение: `DEV_API_PROXY_TARGET` в `.env`). На продакшене nginx должен проксировать те же префиксы; образец — [`test_files/nginx.config`](test_files/nginx.config) (`/me`, `/stats`, `/observability` и отдельно `/profile` для PATCH, иначе фронт получит HTML вместо JSON).
 
 ## Авторизация и БД
 
-- Таблицы создаются SQL-файлами в `backend/migrations/` (в репозитории их сейчас два):
+- Таблицы создаются SQL-файлами в `backend/migrations/`:
   - [`backend/migrations/001_auth_tables.sql`](backend/migrations/001_auth_tables.sql) — пользователи/почта/refresh-токены
   - [`backend/migrations/002_generation_history.sql`](backend/migrations/002_generation_history.sql) — история генераций (TS-код + схема)
   - [`backend/migrations/003_generation_history_input_base64.sql`](backend/migrations/003_generation_history_input_base64.sql) — опционально сохраняемый исходный файл (base64) для проверки TS из истории
+  - [`backend/migrations/004_generation_history_tokens.sql`](backend/migrations/004_generation_history_tokens.sql) — токены (`prompt/completion/total`) по каждому запросу генерации
 - На Ubuntu после создания БД (см. `scripts/init_syharikts_db.sh`) примените миграции:
   ```bash
   export DATABASE_URL='postgresql+asyncpg://USER:PASS@127.0.0.1:5432/syharikts'
@@ -78,6 +79,7 @@ Frontend по умолчанию: `http://localhost:5173`.
 - `/reset-password` — запрос кода и установка нового пароля  
 - `/upload` — генерация и проверка TS в одном интерфейсе (режимы внутри страницы) — только для авторизованных пользователей  
 - `/profile` — профиль и история генераций — только для авторизованных пользователей  
+- `/profile/tech` — техническая страница observability/Langfuse — только для авторизованных пользователей  
 
 `POST /generate` и `POST /infer-schema` требуют заголовок **`Authorization: Bearer <access_token>`**.
 
@@ -91,6 +93,9 @@ Frontend по умолчанию: `http://localhost:5173`.
 - `GET /me/generations` (Bearer)
 - `GET /me/generations/{id}` (Bearer)
 - `GET /me/generations/{id}/check-input` (Bearer) — сохранённый base64 исходного файла для клиентской проверки (если есть)
+- `GET /me/token-usage` (Bearer) — персональная статистика токенов (по запросам + суммы)
+- `GET /stats/generations` (Bearer) — общее число генераций за всё время
+- `GET /observability/summary` (Bearer) — техническая сводка по observability/Langfuse
 - `POST /generate` (Bearer)
 - `POST /infer-schema` (Bearer)
 
@@ -211,6 +216,12 @@ curl -X POST "http://localhost:8000/infer-schema" \
 - `GIGACHAT_MAX_TOKENS`
 - `GIGACHAT_RETRY_ATTEMPTS`
 - `GIGACHAT_TIMEOUT_SECONDS`
+- `LANGFUSE_ENABLED`
+- `LANGFUSE_HOST`
+- `LANGFUSE_PUBLIC_KEY`
+- `LANGFUSE_SECRET_KEY`
+- `LANGFUSE_ENV`
+- `LANGFUSE_RELEASE`
 
 ### Парсер
 
@@ -237,6 +248,49 @@ curl -X POST "http://localhost:8000/infer-schema" \
 
 Актуальный пример смотрите в `.env.example`.
 
+## Настройка Langfuse (гайд)
+
+### 1) Создайте проект в Langfuse
+- Зарегистрируйтесь в Langfuse Cloud или поднимите self-host.
+- Создайте проект и получите ключи:
+  - `LANGFUSE_PUBLIC_KEY`
+  - `LANGFUSE_SECRET_KEY`
+- Скопируйте URL инстанса в `LANGFUSE_HOST` (например, `https://cloud.langfuse.com`).
+
+### 2) Настройте переменные окружения backend
+В `.env`:
+
+```bash
+LANGFUSE_ENABLED=true
+LANGFUSE_HOST=https://cloud.langfuse.com
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_ENV=prod
+LANGFUSE_RELEASE=v0.1.0
+```
+
+Важно:
+- `LANGFUSE_SECRET_KEY` хранится только на backend.
+- Не передавайте secret/public ключи во frontend.
+
+### 3) Примените миграции и перезапустите backend
+- Примените SQL миграции, включая `004_generation_history_tokens.sql`.
+- Перезапустите backend (`docker compose up --build -d` или ваш способ запуска).
+
+### 4) Проверьте работу
+- Выполните несколько `POST /generate`.
+- Откройте `/profile/tech`:
+  - увидите суммарные токены пользователя;
+  - график токенов по последним запросам.
+- В Langfuse проверьте появление trace/span для `generate_request`.
+
+### 5) Если видите HTML вместо JSON
+- Проверьте nginx-прокси для префиксов:
+  - `/me`
+  - `/stats`
+  - `/observability`
+- Иначе frontend получит `index.html` и покажет ошибку JSON parse.
+
 ## Тесты
 
 Backend-тесты:
@@ -244,6 +298,13 @@ Backend-тесты:
 ```bash
 cd backend
 python -m unittest discover -s tests -v
+```
+
+Проверка новых API (после авторизации):
+
+```bash
+curl -H "Authorization: Bearer ACCESS_TOKEN" http://localhost:8000/stats/generations
+curl -H "Authorization: Bearer ACCESS_TOKEN" http://localhost:8000/observability/summary
 ```
 
 Покрыты базовые сценарии:
