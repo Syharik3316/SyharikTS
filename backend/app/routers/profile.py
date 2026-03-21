@@ -1,0 +1,100 @@
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db.session import get_db
+from app.dependencies.auth import get_current_user
+from app.models.auth_schemas import (
+    GenerationHistoryDetail,
+    GenerationHistoryItem,
+    ProfileUpdateRequest,
+    UserPublic,
+)
+from app.models.user import GenerationHistory, RefreshToken, User
+from app.services.passwords import hash_password, verify_password
+
+router = APIRouter(tags=["profile"])
+
+
+@router.patch("/profile", response_model=UserPublic)
+async def update_profile(
+    body: ProfileUpdateRequest,
+    db: AsyncSession | None = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    if db is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database is not configured")
+
+    # current_password is required even if only login is being updated.
+    if not verify_password(body.current_password, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid current password")
+
+    if body.login is None and body.new_password is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Nothing to update")
+
+    try:
+        if body.login is not None:
+            user.login = body.login.strip()
+        if body.new_password is not None:
+            user.password_hash = hash_password(body.new_password)
+            # Invalidate refresh tokens after password change.
+            await db.execute(delete(RefreshToken).where(RefreshToken.user_id == user.id))
+
+        await db.commit()
+    except IntegrityError as e:
+        await db.rollback()
+        # Uniqueness is enforced by DB indexes: users_login_lower / users_email_lower.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Login already taken") from e
+
+    return UserPublic.model_validate(user)
+
+
+@router.get("/me/generations", response_model=list[GenerationHistoryItem])
+async def list_generations(
+    db: AsyncSession | None = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    if db is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database is not configured")
+
+    res = await db.execute(
+        select(GenerationHistory)
+        .where(GenerationHistory.user_id == user.id)
+        .order_by(GenerationHistory.created_at.desc())
+    )
+    rows = res.scalars().all()
+    return [
+        GenerationHistoryItem(id=row.id, created_at=row.created_at, main_file_name=row.main_file_name)
+        for row in rows
+    ]
+
+
+@router.get("/me/generations/{generation_id}", response_model=GenerationHistoryDetail)
+async def get_generation_detail(
+    generation_id: uuid.UUID,
+    db: AsyncSession | None = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    if db is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database is not configured")
+
+    res = await db.execute(
+        select(GenerationHistory).where(
+            GenerationHistory.user_id == user.id,
+            GenerationHistory.id == generation_id,
+        )
+    )
+    row = res.scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Generation not found")
+
+    return GenerationHistoryDetail(
+        id=row.id,
+        created_at=row.created_at,
+        main_file_name=row.main_file_name,
+        generated_ts_code=row.generated_ts_code,
+    )
+

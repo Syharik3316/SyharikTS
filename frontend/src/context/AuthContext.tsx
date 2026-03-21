@@ -94,7 +94,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       authApi.persistSession(tokens);
       const me = await authApi.fetchMe(tokens.access_token);
       setUser(me);
-      navigate("/generator", { replace: true });
+      navigate("/upload", { replace: true });
     },
     [navigate],
   );

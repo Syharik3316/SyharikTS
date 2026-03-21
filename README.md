@@ -8,6 +8,7 @@
 - Загружает файл, парсит данные/текст и формирует `extracted_input_json`.
 - Генерирует TypeScript-код через LLM (`/generate`) — **только для авторизованных пользователей**.
 - Строит пример схемы по файлу (`/infer-schema`) — **только для авторизованных пользователей**.
+- Хранит историю генераций и позволяет управлять профилем пользователя (`/profile`) — тоже **только для авторизованных пользователей**.
 - Возвращает стабильные коды ошибок парсинга (`UNSUPPORTED_FILE_TYPE`, `OCR_NO_TEXT`, `TEXT_DECODE_FAILED`).
 
 ## Поддерживаемые форматы
@@ -54,7 +55,9 @@ Frontend по умолчанию: `http://localhost:5173`.
 
 ## Авторизация и БД
 
-- Таблицы пользователей и токенов создаются **одним SQL-файлом**: [`backend/migrations/001_auth_tables.sql`](backend/migrations/001_auth_tables.sql).
+- Таблицы создаются SQL-файлами в `backend/migrations/` (в репозитории их сейчас два):
+  - [`backend/migrations/001_auth_tables.sql`](backend/migrations/001_auth_tables.sql) — пользователи/почта/refresh-токены
+  - [`backend/migrations/002_generation_history.sql`](backend/migrations/002_generation_history.sql) — история генераций (TS-код + схема)
 - На Ubuntu после создания БД (см. `scripts/init_syharikts_db.sh`) примените миграции:
   ```bash
   export DATABASE_URL='postgresql+asyncpg://USER:PASS@127.0.0.1:5432/syharikts'
@@ -70,7 +73,8 @@ Frontend по умолчанию: `http://localhost:5173`.
 - `/login` — вход и регистрация  
 - `/verify-email` — только после успешной регистрации (email хранится в `sessionStorage`, прямой заход редиректит на `/login`); ввод кода и повторная отправка с таймером 1 мин  
 - `/reset-password` — запрос кода и установка нового пароля  
-- `/generator`, `/check` — только для авторизованных пользователей  
+- `/upload` — генерация и проверка TS в одном интерфейсе (режимы внутри страницы) — только для авторизованных пользователей  
+- `/profile` — профиль и история генераций — только для авторизованных пользователей  
 
 `POST /generate` и `POST /infer-schema` требуют заголовок **`Authorization: Bearer <access_token>`**.
 
@@ -80,6 +84,9 @@ Frontend по умолчанию: `http://localhost:5173`.
 - `POST /auth/register`, `POST /auth/verify-email`, `POST /auth/resend-registration-code`, `POST /auth/login`, `POST /auth/refresh`
 - `POST /auth/reset-request`, `POST /auth/reset-confirm`
 - `GET /auth/me` (Bearer)
+- `PATCH /profile` (Bearer)
+- `GET /me/generations` (Bearer)
+- `GET /me/generations/{id}` (Bearer)
 - `POST /generate` (Bearer)
 - `POST /infer-schema` (Bearer)
 
@@ -136,6 +143,41 @@ curl -X POST "http://localhost:8000/infer-schema" \
   -H "Authorization: Bearer ACCESS_TOKEN" \
   -F "file=@./example.csv"
 ```
+
+---
+
+## Профиль и история генераций
+
+### `PATCH /profile`
+
+Описание:
+- Вход:
+  - `login` (str, опционально)
+  - `current_password` (str, обязательно)
+  - `new_password` (str, опционально)
+- Ответ:
+  - `UserPublic`:
+    - `id`, `email`, `login`, `is_email_verified`
+
+Ошибки:
+- 400: нечего обновлять
+- 401: неверный `current_password` или нет Bearer-токена
+- 409: `login` уже занят
+
+### `GET /me/generations`
+
+Описание:
+- Ответ: массив `GenerationHistoryItem`:
+  - `id`
+  - `created_at`
+  - `main_file_name`
+
+### `GET /me/generations/{id}`
+
+Описание:
+- Ответ: `GenerationHistoryDetail`:
+  - `id`, `created_at`, `main_file_name`
+  - `generated_ts_code`: сгенерированный TypeScript-код (как строка)
 
 ## Парсинг и OCR
 

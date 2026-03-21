@@ -55,3 +55,52 @@ curl -X POST "http://localhost:8000/infer-schema" \
   -F "file=@./example.csv"
 ```
 ---
+
+## Профиль и история генераций
+
+## PATCH /profile
+
+Описание:
+- Bearer: требуется
+- Вход:
+  - `login` (optional): строка
+  - `current_password`: обязательная строка
+  - `new_password` (optional): строка
+- Ответ:
+  - `UserPublic`: `id`, `email`, `login`, `is_email_verified`
+
+Ошибки:
+- 400: нечего обновлять
+- 401: неверный `current_password` или нет Bearer
+- 409: `login` уже занят
+
+### Пример curl
+```bash
+curl -X PATCH "http://localhost:8000/profile" \
+  -H "Authorization: Bearer ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"login":"new_login","current_password":"oldpass","new_password":"newpass"}'
+```
+
+---
+
+## GET /me/generations
+
+Описание:
+- Bearer: требуется
+- Ответ:
+  - массив `GenerationHistoryItem`:
+    - `id`
+    - `created_at`
+    - `main_file_name`
+
+---
+
+## GET /me/generations/{id}
+
+Описание:
+- Bearer: требуется
+- Ответ:
+  - `GenerationHistoryDetail`:
+    - `id`, `created_at`, `main_file_name`
+    - `generated_ts_code`: строка с TS-кодом

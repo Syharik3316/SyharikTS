@@ -1,0 +1,202 @@
+.page {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(100dvh - 220px);
+  padding: 24px 16px 40px;
+  box-sizing: border-box;
+}
+
+.card {
+  width: min(100%, 520px);
+  min-height: min(560px, calc(100dvh - 240px));
+  padding: 48px 36px 52px;
+  border-radius: 24px;
+  border: 1px solid var(--border-weak);
+  background: color-mix(in srgb, var(--panel) 42%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.18);
+  box-sizing: border-box;
+}
+
+.title {
+  margin: 0 0 40px;
+  font-size: 34px;
+  font-weight: 800;
+  text-align: center;
+  color: var(--text);
+  letter-spacing: 0.02em;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.label {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel) 40%, transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: 17px;
+  line-height: 1.4;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.input::placeholder {
+  color: var(--muted);
+  opacity: 0.85;
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.submit {
+  appearance: none;
+  margin-top: 12px;
+  width: 100%;
+  padding: 16px 22px;
+  border-radius: 18px;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--text);
+  font: inherit;
+  font-size: 18px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background-color 0.2s ease, transform 0.05s ease,
+    box-shadow 0.2s ease;
+}
+
+.submit:hover {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.2);
+}
+
+.submit:active {
+  transform: translateY(1px);
+}
+
+.submit:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.submit:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.formError {
+  margin: 0;
+  font-size: 15px;
+  color: color-mix(in srgb, #ff6b6b 85%, var(--text));
+  text-align: center;
+  line-height: 1.35;
+}
+
+.inlineLink {
+  color: var(--accent);
+  text-decoration: underline;
+  font-weight: 600;
+  font-size: inherit;
+}
+
+.successInline {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid var(--accent-border);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  text-align: center;
+  line-height: 1.35;
+}
+
+.footerDivider {
+  width: 100%;
+  height: 0;
+  margin: 32px 0 30px;
+  padding: 0;
+  border: 0;
+  border-top: 1px solid var(--border-weak);
+}
+
+.hint {
+  margin: 0;
+  text-align: center;
+  font-size: 16px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.registerLink {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  margin-top: 14px;
+  padding: 14px 20px;
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel) 50%, transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: 17px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background-color 0.2s ease;
+  box-sizing: border-box;
+}
+
+.registerLink:hover {
+  border-color: var(--accent-border);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.registerLink:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (max-aspect-ratio: 9/16) {
+  .page {
+    min-height: calc(100dvh - 200px);
+    padding: 16px 12px 32px;
+  }
+
+  .card {
+    min-height: min(500px, calc(100dvh - 200px));
+    padding: 34px 22px 40px;
+  }
+
+  .title {
+    font-size: 28px;
+    margin-bottom: 28px;
+  }
+}

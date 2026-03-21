@@ -2,58 +2,73 @@ import React from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import PrivateRoute from "./components/PrivateRoute";
 import { useAuth } from "./context/AuthContext";
-import CheckPage from "./pages/CheckPage";
-import GeneratorPage from "./pages/GeneratorPage";
-import LoginPage from "./pages/LoginPage";
-import ResetPasswordPage from "./pages/ResetPasswordPage";
-import VerifyEmailPage from "./pages/VerifyEmailPage";
+import Home from "./pages/Home/Home.jsx";
+import Login from "./pages/Login/Login.jsx";
+import Register from "./pages/Register/Register.jsx";
+import RegisterConfirm from "./pages/RegisterConfirm/RegisterConfirm.jsx";
+import ResetPassword from "./pages/ResetPassword/ResetPassword.jsx";
+import Upload from "./pages/Upload/Upload.jsx";
+import Profile from "./pages/Profile/Profile.jsx";
+import GenerationDetail from "./pages/GenerationDetail/GenerationDetail.jsx";
 
-function LoginRoute() {
+function GuestRoute({ children }: { children: React.ReactNode }) {
   const { user, ready, bootstrapping } = useAuth();
-  if (bootstrapping || !ready) {
-    return (
-      <div className="container">
-        <p className="hint">Загрузка…</p>
-      </div>
-    );
+  if (!ready || bootstrapping) {
+    return <div className="sessionLoading">Загрузка…</div>;
   }
   if (user) {
-    return <Navigate to="/generator" replace />;
+    return <Navigate to="/upload" replace />;
   }
-  return <LoginPage />;
+  return <>{children}</>;
 }
 
 export default function App() {
   return (
     <Routes>
-      <Route path="/login" element={<LoginRoute />} />
-      <Route path="/verify-email" element={<VerifyEmailPage />} />
-      <Route path="/reset-password" element={<ResetPasswordPage />} />
+      <Route path="/" element={<Home />} />
       <Route
-        path="/"
+        path="/login"
+        element={
+          <GuestRoute>
+            <Login />
+          </GuestRoute>
+        }
+      />
+      <Route
+        path="/register"
+        element={
+          <GuestRoute>
+            <Register />
+          </GuestRoute>
+        }
+      />
+      <Route path="/verify-email" element={<RegisterConfirm />} />
+      <Route path="/reset-password" element={<ResetPassword />} />
+      <Route
+        path="/upload"
         element={
           <PrivateRoute>
-            <Navigate to="/generator" replace />
+            <Upload />
           </PrivateRoute>
         }
       />
       <Route
-        path="/generator"
+        path="/profile"
         element={
           <PrivateRoute>
-            <GeneratorPage />
+            <Profile />
           </PrivateRoute>
         }
       />
       <Route
-        path="/check"
+        path="/profile/generations/:id"
         element={
           <PrivateRoute>
-            <CheckPage />
+            <GenerationDetail />
           </PrivateRoute>
         }
       />
-      <Route path="*" element={<Navigate to="/generator" replace />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }

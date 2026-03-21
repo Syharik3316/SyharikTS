@@ -19,6 +19,7 @@
   "devDependencies": {
     "@types/react": "*",
     "@types/react-dom": "*",
+    "@types/react-google-recaptcha": "*",
     "@vitejs/plugin-react": "*",
     "vite": "*"
   }

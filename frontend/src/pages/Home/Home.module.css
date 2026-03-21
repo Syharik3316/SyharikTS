@@ -1,0 +1,230 @@
+.home {
+  width: 100%;
+}
+
+.layout {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 28px;
+}
+
+.left {
+  flex: 1 1 520px;
+  margin-left: -10px;
+}
+
+.title {
+  margin: 0;
+  font-size: 60px;
+  line-height: 1.2;
+  letter-spacing: -0.3px;
+  color: var(--text);
+}
+
+.subtitle {
+  margin: 18px 0 0;
+  font-size: 20px;
+  line-height: 1.35;
+  color: var(--muted);
+  max-width: 920px;
+}
+
+.cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  margin-top: 26px;
+  padding: 12px 18px;
+  border-radius: 22px;
+
+  border: 1px solid var(--border);
+  background: var(--accent-soft);
+  color: var(--text);
+  font-weight: 700;
+
+  transform: translateY(0);
+  transition:
+    transform 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+    background-color 0.25s ease,
+    border-color 0.25s ease,
+    box-shadow 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.cta:hover {
+  transform: translateY(-5px);
+  border-color: var(--accent-border);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent),
+    0 12px 44px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.cta:active {
+  transform: translateY(-2px);
+  transition-duration: 0.1s;
+}
+
+.cta:focus-visible {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.right {
+  flex: 0 0 auto;
+  width: min(420px, 42vw);
+}
+
+.gifPlaceholder {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+
+  border-radius: 18px;
+  border: 1px solid var(--border-weak);
+  background: linear-gradient(
+    135deg,
+    rgba(29, 173, 12, 0.12) 0%,
+    rgba(255, 255, 255, 0.03) 45%,
+    rgba(29, 173, 12, 0.07) 100%
+  );
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  transform: translateY(0);
+  transition:
+    transform 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 0.25s ease,
+    background 0.25s ease;
+}
+
+.gifPlaceholderText {
+  font-weight: 800;
+  color: var(--muted);
+  letter-spacing: 0.4px;
+}
+
+.gifPlaceholder:hover {
+  transform: translateY(-5px);
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 1px rgba(29, 173, 12, 0.18),
+    0 20px 64px rgba(29, 173, 12, 0.18);
+  background: rgba(29, 173, 12, 0.10);
+}
+
+.gifPlaceholder:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.features {
+  width: 100%;
+  max-width: 1120px;
+  margin: 56px auto 0;
+  padding: 0 8px;
+  box-sizing: border-box;
+}
+
+.featuresTitle {
+  margin: 0 0 28px;
+  font-size: 34px;
+  font-weight: 800;
+  line-height: 1.2;
+  text-align: center;
+  letter-spacing: 0.02em;
+  color: var(--text);
+}
+
+.featuresGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 22px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.featureCard {
+  margin: 0;
+  padding: 20px 18px 22px;
+  min-height: 120px;
+  border-radius: 18px;
+  border: 1px solid var(--border-weak);
+  background: color-mix(in srgb, var(--panel) 38%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.12);
+  box-sizing: border-box;
+}
+
+.featureText {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+@media (max-width: 900px), (max-aspect-ratio: 9/16) {
+  .layout {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 18px;
+  }
+
+  .left {
+    margin-left: 0;
+    max-width: 100%;
+  }
+
+  .right {
+    width: 100%;
+    max-width: 420px;
+    align-self: center;
+  }
+
+  .gifPlaceholder {
+    border-radius: 14px;
+  }
+
+  .title {
+    font-size: clamp(28px, 8vw, 48px);
+  }
+
+  .subtitle {
+    font-size: 18px;
+  }
+
+  .cta {
+    min-height: 48px;
+    padding: 14px 22px;
+    width: 100%;
+    max-width: 320px;
+    box-sizing: border-box;
+  }
+
+  .features {
+    margin-top: 40px;
+    padding: 0 4px;
+  }
+
+  .featuresTitle {
+    font-size: 26px;
+    margin-bottom: 20px;
+  }
+
+  .featuresGrid {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .featureCard {
+    min-height: 100px;
+    padding: 18px 16px;
+  }
+
+  .featureText {
+    font-size: 14px;
+  }
+}
+

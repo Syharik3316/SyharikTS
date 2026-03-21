@@ -1,5 +1,6 @@
 import re
 import uuid
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
@@ -81,3 +82,37 @@ class UserPublic(BaseModel):
     is_email_verified: bool
 
     model_config = {"from_attributes": True}
+
+
+class ProfileUpdateRequest(BaseModel):
+    login: str | None = Field(None, min_length=3, max_length=64)
+    current_password: str = Field(..., min_length=1, max_length=128)
+    new_password: str | None = Field(None, min_length=8, max_length=128)
+
+    @field_validator("login")
+    @classmethod
+    def login_alphanumeric(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        if not _LOGIN_RE.match(v):
+            raise ValueError("login must be 3–64 chars: letters, digits, underscore only")
+        return v
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password(cls, v: str | None) -> str | None:
+        # pydantic Field(min_length=8) handles minimal length; keep hook for future extensions.
+        return v
+
+
+class GenerationHistoryItem(BaseModel):
+    id: uuid.UUID
+    created_at: datetime
+    main_file_name: str
+
+
+class GenerationHistoryDetail(BaseModel):
+    id: uuid.UUID
+    created_at: datetime
+    main_file_name: str
+    generated_ts_code: str

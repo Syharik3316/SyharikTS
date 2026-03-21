@@ -1,10 +1,12 @@
 import json
 import os
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies.auth import get_current_user
 from app.models.schemas import GenerateResponse
-from app.models.user import User
+from app.models.user import GenerationHistory, User
+from app.db.session import get_db
 from app.services.file_parser import ParseFileError, SUPPORTED_FILE_KINDS, extract_extracted_input
 from app.services.prompt_builder import build_generation_prompt, build_interface_ts
 from app.services.llm_client import LLMClient
@@ -25,6 +27,7 @@ def _read_optional_positive_int(name: str) -> int | None:
 @router.post("/generate", response_model=GenerateResponse)
 async def generate(
     _user: User = Depends(get_current_user),
+    db: AsyncSession | None = Depends(get_db),
     file: UploadFile = File(..., description=f"Uploaded file ({'/'.join(k.upper() for k in SUPPORTED_FILE_KINDS)})"),
     schema: str = Form(..., description="JSON-string schema example for output objects"),
 ):
@@ -93,6 +96,17 @@ async def generate(
     # Basic sanity check: the signature must exist.
     if "export default function" not in code:
         raise HTTPException(status_code=500, detail="Generated code missing export default function")
+
+    if db is not None:
+        db.add(
+            GenerationHistory(
+                user_id=_user.id,
+                generated_ts_code=code,
+                schema_text=schema,
+                main_file_name=file.filename or "unknown",
+            )
+        )
+        await db.commit()
 
     return GenerateResponse(code=code)
 

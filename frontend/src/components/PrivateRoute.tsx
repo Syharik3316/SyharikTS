@@ -6,11 +6,7 @@ export default function PrivateRoute({ children }: { children: React.ReactNode }
   const { user, ready, bootstrapping } = useAuth();
 
   if (!ready || bootstrapping) {
-    return (
-      <div className="container">
-        <p className="hint">Загрузка сессии…</p>
-      </div>
-    );
+    return <div className="sessionLoading">Загрузка сессии…</div>;
   }
 
   if (!user) {
