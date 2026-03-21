@@ -172,6 +172,15 @@ def _extract_image_transcript(contents: bytes, file_kind: str) -> str:
         text = transcribe_image_with_gigachat(contents, file_kind).strip()
     except ValueError as e:
         raise ParseFileError(code="OCR_NO_TEXT", message=str(e)) from e
+    except Exception as e:
+        msg = str(e)
+        up = msg.upper()
+        if "GIGACHAT_RATE_LIMIT" in up or "429" in up or "TOO MANY REQUESTS" in up:
+            raise ParseFileError(
+                code="GIGACHAT_RATE_LIMIT",
+                message="GigaChat временно ограничил запросы (429). Подождите 30-60 секунд и повторите попытку.",
+            ) from e
+        raise
 
     if not text:
         raise ParseFileError(

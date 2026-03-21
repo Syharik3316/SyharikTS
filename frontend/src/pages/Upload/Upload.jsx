@@ -60,7 +60,7 @@ function pickSingleAllowedFile(fileList) {
 }
 
 function formatSupportedFormatsShort() {
-  return 'CSV, XLS, XLSX, PDF, DOCX, DOC, PNG, JPG, TIFF, TXT, MD, RTF, ODT, XML, EPUB, FB2';
+  return 'CSV, XLS, XLSX, PDF, DOCX, DOC, TXT, MD, RTF, ODT, XML, EPUB, FB2';
 }
 
 export default function Upload() {

@@ -27,7 +27,7 @@ async def infer_schema(
         )
         schema_obj = infer_schema_from_extracted(file_kind, extracted_input_json)
     except ParseFileError as e:
-        status = 415 if e.code == "UNSUPPORTED_FILE_TYPE" else 400
+        status = 415 if e.code == "UNSUPPORTED_FILE_TYPE" else 429 if e.code == "GIGACHAT_RATE_LIMIT" else 400
         raise HTTPException(status_code=status, detail=e.as_detail())
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

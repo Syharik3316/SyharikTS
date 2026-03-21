@@ -56,6 +56,9 @@ export function mapStatusToUserMessage(status: number, detail?: string, code?: s
     return detail ? `Доступ запрещен: ${detail}` : "Доступ запрещен.";
   }
   if (status === 404) return "Запрошенный ресурс не найден.";
+  if (status === 429 || code === "GIGACHAT_RATE_LIMIT") {
+    return "GigaChat временно ограничил количество запросов (429). Подождите немного и повторите попытку.";
+  }
   if (status === 415) {
     const d = (detail || "").toLowerCase();
     if (d.includes("unsupported file type")) return "Файл данного типа не поддерживается.";

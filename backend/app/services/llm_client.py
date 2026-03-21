@@ -246,11 +246,22 @@ class LLMClient:
                 "  };\n"
                 "  const csv = decodeBase64(TRANSCRIPT_B64);\n"
                 "  const table = parseCsv(csv);\n"
-                "  if (!table.length) return [];\n"
+                "  const keys = Object.keys(schema);\n"
+                "  if (!table.length || table.length === 1) {\n"
+                "    const obj: Record<string, unknown> = {};\n"
+                "    for (const key of keys) {\n"
+                "      const ex = schema[key];\n"
+                "      if (key === \"text\" || key === \"value\") obj[key] = csv;\n"
+                "      else if (typeof ex === \"number\") obj[key] = 0;\n"
+                "      else if (typeof ex === \"boolean\") obj[key] = false;\n"
+                "      else if (ex === null) obj[key] = null;\n"
+                "      else obj[key] = \"\";\n"
+                "    }\n"
+                "    return [obj as DealData];\n"
+                "  }\n"
                 "  const headers = table[0].map((h) => String(h ?? \"\").trim());\n"
                 "  const idxByHeader = new Map<string, number>();\n"
                 "  headers.forEach((h, i) => idxByHeader.set(norm(h), i));\n"
-                "  const keys = Object.keys(schema);\n"
                 "  const result: DealData[] = [];\n"
                 "  for (let r = 1; r < table.length; r++) {\n"
                 "    const line = table[r];\n"
@@ -673,14 +684,26 @@ class LLMClient:
 
         last_error: str = ""
         resp = None
+        oauth_retry_attempts = int((os.getenv("GIGACHAT_OAUTH_RETRY_ATTEMPTS") or "3").strip() or "3")
+        oauth_retry_delay_ms = int((os.getenv("GIGACHAT_OAUTH_RETRY_DELAY_MS") or "1200").strip() or "1200")
         for scope in scope_candidates:
-            resp = requests.post(
-                oauth_url,
-                headers=headers,
-                data={"scope": scope},
-                timeout=60,
-                verify=verify_tls,
-            )
+            attempt = 0
+            while True:
+                resp = requests.post(
+                    oauth_url,
+                    headers=headers,
+                    data={"scope": scope},
+                    timeout=60,
+                    verify=verify_tls,
+                )
+                if resp.status_code == 200:
+                    break
+                # OAuth endpoint can burst-limit; retry same scope with backoff.
+                if resp.status_code == 429 and attempt < max(0, oauth_retry_attempts - 1):
+                    attempt += 1
+                    time.sleep((oauth_retry_delay_ms * attempt) / 1000.0)
+                    continue
+                break
             if resp.status_code == 200:
                 break
 
@@ -693,6 +716,9 @@ class LLMClient:
                 msg = body.get("error_description") or body.get("error") or json.dumps(body)
             details = msg or resp.text[:300]
             last_error = f"scope={scope}: {details}"
+
+            if resp.status_code == 429:
+                raise RuntimeError(f"GIGACHAT_RATE_LIMIT: GigaChat OAuth error 429: {details}")
 
             # For non-scope errors don't continue; fail fast.
             if "scope from db not fully includes consumed scope" not in details:
