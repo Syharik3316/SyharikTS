@@ -31,7 +31,8 @@ server {
     index index.html;
     disable_symlinks if_not_owner from=$root_path;
 
-    client_max_body_size 50m;
+    # Large CSV/XLSX + form "schema" JSON (many fields) — keep above typical multipart size.
+    client_max_body_size 500m;
 
     # Важно: includes FastPanel должны идти ПЕРЕД нашими location, иначе дублирующий
     # location /auth (или другой API) в include может переопределить прокси и дать 502 только новым путям.

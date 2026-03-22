@@ -17,7 +17,7 @@ from app.db.session import get_db
 from app.services.file_parser import ParseFileError, SUPPORTED_FILE_KINDS, detect_file_kind, extract_extracted_input_from_bytes
 from app.services.generation_cache import build_generator_fingerprint, build_input_fingerprint
 from app.services.langfuse_client import LangfuseTrace, build_safe_prompt_preview
-from app.services.prompt_builder import build_generation_prompt, build_interface_ts
+from app.services.prompt_builder import build_generation_prompt, build_interface_ts, build_interface_ts_for_llm_prompt
 from app.services.llm_client import LLMClient
 
 router = APIRouter()
@@ -231,12 +231,13 @@ async def generate(
     try:
         with trace.span("build_interface_ts"):
             interface_ts = build_interface_ts(schema_obj)
+            interface_ts_prompt = build_interface_ts_for_llm_prompt(schema_obj)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid schema: {e}")
 
     with trace.span("build_generation_prompt", metadata={"file_kind": file_kind}):
         prompt = build_generation_prompt(
-            extracted_input_json, schema_obj, interface_ts=interface_ts, file_kind=file_kind
+            extracted_input_json, schema_obj, interface_ts=interface_ts_prompt, file_kind=file_kind
         )
 
     await _fail_if_disconnected()
@@ -253,7 +254,7 @@ async def generate(
                 prompt=prompt,
                 extracted_input_json=extracted_input_json,
                 schema_obj=schema_obj,
-                interface_ts=interface_ts,
+                interface_ts=interface_ts,  # full interface for stub / guards
                 file_kind=file_kind,
             )
         llm_duration_ms = int((time.perf_counter() - llm_started) * 1000)

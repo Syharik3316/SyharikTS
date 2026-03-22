@@ -12,6 +12,9 @@ export default defineConfig(({ mode }) => {
   const apiProxy = {
     target: proxyTarget,
     changeOrigin: true,
+    // Match nginx proxy_read_timeout for long /generate LLM calls.
+    timeout: 600_000,
+    proxyTimeout: 600_000,
   } as const;
 
   return {

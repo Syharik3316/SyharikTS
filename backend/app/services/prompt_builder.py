@@ -1,7 +1,60 @@
 import json
+import os
 from typing import Any
 
 from app.utils.helpers import ensure_json_object
+
+
+def _read_positive_int_env(name: str, default: int) -> int:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        val = int(raw)
+        return val if val > 0 else default
+    except ValueError:
+        return default
+
+
+def _prompt_max_schema_json_chars() -> int:
+    return _read_positive_int_env("PROMPT_MAX_SCHEMA_JSON_CHARS", 400_000)
+
+
+def _prompt_schema_example_string_max_chars() -> int:
+    return _read_positive_int_env("PROMPT_SCHEMA_EXAMPLE_STRING_MAX_CHARS", 512)
+
+
+def _prompt_max_schema_field_names() -> int:
+    return _read_positive_int_env("PROMPT_MAX_SCHEMA_FIELD_NAMES", 800)
+
+
+def _prompt_max_interface_top_level_keys() -> int:
+    """Limit DealData interface size in LLM prompt (full schema stays in embedded `const schema` JSON)."""
+    return _read_positive_int_env("PROMPT_MAX_INTERFACE_TOP_LEVEL_KEYS", 200)
+
+
+def _truncate_schema_example_strings(obj: Any, *, max_len: int, max_list_items: int = 200) -> Any:
+    if isinstance(obj, dict):
+        return {k: _truncate_schema_example_strings(v, max_len=max_len, max_list_items=max_list_items) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_truncate_schema_example_strings(v, max_len=max_len, max_list_items=max_list_items) for v in obj[:max_list_items]]
+    if isinstance(obj, str) and len(obj) > max_len:
+        return obj[:max_len] + "…"
+    return obj
+
+
+def _schema_compact_for_prompt(schema: dict[str, Any]) -> str:
+    max_chars = _prompt_max_schema_json_chars()
+    str_limit = _prompt_schema_example_string_max_chars()
+    keys = list(schema.keys())
+    while keys:
+        subset = {k: schema[k] for k in keys}
+        slim = _truncate_schema_example_strings(subset, max_len=str_limit)
+        compact = json.dumps(slim, ensure_ascii=False, separators=(",", ":"))
+        if len(compact) <= max_chars:
+            return compact
+        keys = keys[:-1]
+    return "{}"
 
 
 _CRM_HEADER_ALIASES = {
@@ -103,7 +156,26 @@ def build_interface_ts(schema_obj: Any, *, interface_name: str = "DealData") -> 
     return f"interface {interface_name} {{\n  {body}\n}}"
 
 
-ddef build_generation_prompt(
+def build_interface_ts_for_llm_prompt(schema_obj: Any, *, interface_name: str = "DealData") -> str:
+    """
+    Interface block for the LLM prompt only. Large schemas duplicate keys in `interface` + `const schema`;
+    trimming top-level keys here keeps prompts small (timeouts / context limits) while `_schema_compact_for_prompt`
+    still carries the full example shape as JSON.
+    """
+    obj = ensure_json_object(schema_obj)
+    max_keys = _prompt_max_interface_top_level_keys()
+    keys = list(obj.keys())
+    if len(keys) <= max_keys:
+        return build_interface_ts(schema_obj, interface_name=interface_name)
+    slim = {k: obj[k] for k in keys[:max_keys]}
+    note = (
+        f"// Prompt interface: first {max_keys} of {len(keys)} top-level fields. "
+        "Full example shape is in `const schema` below.\n"
+    )
+    return note + build_interface_ts(slim, interface_name=interface_name)
+
+
+def build_generation_prompt(
     extracted_input_json: Any,
     schema_obj: Any,
     *,
@@ -111,18 +183,7 @@ ddef build_generation_prompt(
     file_kind: str,
 ) -> str:
     schema = ensure_json_object(schema_obj)
-    schema_compact = json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
-    
-    payload_obj = ensure_json_object(extracted_input_json) if isinstance(extracted_input_json, dict) else {
-        "kind": file_kind,
-        "records": extracted_input_json if isinstance(extracted_input_json, list) else [],
-        "text": "",
-        "tables": [],
-        "metadata": {"kind": file_kind},
-    }
-    payload_compact = json.dumps(payload_obj, ensure_ascii=False, separators=(",", ":"))
-    if len(payload_compact) > 12000:
-        payload_compact = payload_compact[:12000] + "…"
+    schema_compact = _schema_compact_for_prompt(schema)
 
     # Extract field names from schema
     def get_fields(obj, prefix=""):
@@ -135,7 +196,26 @@ ddef build_generation_prompt(
                 elif isinstance(v, list) and v and isinstance(v[0], dict):
                     fields.extend(get_fields(v[0], prefix + k + "."))
         return fields
-    schema_fields = get_fields(schema)
+    all_schema_fields = get_fields(schema)
+    max_field_names = _prompt_max_schema_field_names()
+    if len(all_schema_fields) > max_field_names:
+        schema_fields = all_schema_fields[:max_field_names] + [
+            f"… (+{len(all_schema_fields) - max_field_names} more)"
+        ]
+    else:
+        schema_fields = all_schema_fields
+
+    payload_obj = (
+        ensure_json_object(extracted_input_json)
+        if isinstance(extracted_input_json, dict)
+        else {
+            "kind": file_kind,
+            "records": extracted_input_json if isinstance(extracted_input_json, list) else [],
+            "text": "",
+            "tables": [],
+            "metadata": {"kind": file_kind},
+        }
+    )
 
     # Sample keys from extracted to help LLM
     sample_keys = []

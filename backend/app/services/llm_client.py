@@ -11,76 +11,17 @@ import urllib3
 from urllib3.exceptions import InsecureRequestWarning
 
 from app.services.langfuse_client import LangfuseTrace, build_safe_prompt_preview
+from app.services.schema_aliases import (
+    CRM_HEADER_ALIASES,
+    build_aliases_for_schema,
+    collect_schema_field_keys,
+    strip_schema_meta_for_output,
+)
 from app.utils.helpers import (
     extract_typescript_code,
     looks_like_incomplete_typescript,
     ensure_json_object,
 )
-
-_CRM_HEADER_ALIASES = {
-    "actPlanDate": ["Плановая дата акта"],
-    "closeReason": ["Сделка - Причина закрытия"],
-    "closeReasonComment": ["Сделка - Комментарий к причине закрытия"],
-    "creationDate": ["Дата создания"],
-    "creator": ["Сделка - Создал"],
-    "deal": ["Сделка"],
-    "dealCreationDate": ["Сделка - Дата создания"],
-    "dealId": ["Сделка - ID сделки"],
-    "dealIdentifier": ["Сделка - Идентификатор"],
-    "dealLastUpdateDate": ["Сделка - Дата последнего обновления"],
-    "dealName": ["Сделка - Название"],
-    "dealProduct": ["Сделка - Продукт"],
-    "dealRevenueAmount": ["Сделка - Сумма выручки"],
-    "dealSource": ["Сделка - Источник сделки"],
-    "dealStage": ["Сделка - Стадия"],
-    "dealStageFinal": ["Стадия (Сделка)"],
-    "dealStageTransitionDate": ["Сделка - Дата перехода объекта на новую стадию"],
-    "deliveryType": ["Тип поставки"],
-    "description": ["Сделка - Описание"],
-    "directSupply": ["Сделка - Прямая поставка"],
-    "distributor": ["Сделка - Дистрибьютор"],
-    "finalLicenseAmount": ["Сделка - Итоговая сумма лицензий"],
-    "finalServiceAmount": ["Сделка - Итоговая сумма услуг"],
-    "finalServiceAmountByRevenueWithVAT": ["Сделка - Итоговая сумма услуг по выручке (с НДС)"],
-    "finalServiceAmountWithVAT": ["Сделка - Итоговая сумма услуг (с НДС)"],
-    "forecast": ["Сделка - Прогноз"],
-    "identifierRevenue": ["Идентификатор (Выручка)"],
-    "invoiceAmount": ["Сумма акта"],
-    "invoiceAmountWithVAT": ["Сумма акта (с НДС)"],
-    "lastUpdateDate": ["Дата последнего обновления"],
-    "marketingEvent": ["Сделка - Маркетинговое мероприятие"],
-    "organization": ["Сделка - Организация"],
-    "partner": ["Сделка - Партнер по сделке"],
-    "product": ["Продукт"],
-    "quantity": ["Количество"],
-    "responsiblePerson": ["Сделка - Ответственный"],
-    "revenue": ["Выручка"],
-    "siteLead": ["Сделка - Лид с сайта"],
-    "stageTransitionTime": ["Время перехода на текущую стадию"],
-    "totalProductAmount": ["Сделка - Итоговая сумма продуктов"],
-    "unitOfMeasure": ["Единица измерения"],
-}
-
-
-def _build_aliases_for_schema(schema: Dict[str, Any]) -> Dict[str, List[str]]:
-    aliases: Dict[str, List[str]] = {}
-    for key in schema.keys():
-        vals = _CRM_HEADER_ALIASES.get(key, [])
-        if vals:
-            aliases[key] = vals
-    return aliases
-
-
-def _collect_schema_keys(schema_obj: Any) -> set[str]:
-    schema = ensure_json_object(schema_obj)
-    keys: set[str] = set()
-    for k in schema.keys():
-        keys.add(str(k))
-    input_val = schema.get("input")
-    if isinstance(input_val, list) and input_val and isinstance(input_val[0], dict):
-        for k in input_val[0].keys():
-            keys.add(str(k))
-    return keys
 
 
 class LLMClient:
@@ -202,8 +143,8 @@ class LLMClient:
                 return True
 
         if schema:
-            schema_keys = _collect_schema_keys(schema_obj)
-            known_keys = set(_CRM_HEADER_ALIASES.keys())
+            schema_keys = collect_schema_field_keys(schema_obj)
+            known_keys = set(CRM_HEADER_ALIASES.keys())
             forbidden_keys = known_keys - schema_keys
             for key in forbidden_keys:
                 if f'"{key}"' in code or f"'{key}'" in code:
@@ -215,9 +156,13 @@ class LLMClient:
         self, *, extracted_input_json: Any, schema_obj: Any, interface_ts: str, file_kind: str
     ) -> str:
         schema = ensure_json_object(schema_obj)
-        schema_compact = json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
-        aliases_compact = json.dumps(_build_aliases_for_schema(schema), ensure_ascii=False, separators=(",", ":"))
+        schema_compact = json.dumps(strip_schema_meta_for_output(schema), ensure_ascii=False, separators=(",", ":"))
         extracted_obj = ensure_json_object(extracted_input_json) if isinstance(extracted_input_json, dict) else {}
+        aliases_compact = json.dumps(
+            build_aliases_for_schema(schema, extracted=extracted_obj),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
         extracted_compact = json.dumps(extracted_obj, ensure_ascii=False, separators=(",", ":"))
 
         if file_kind not in {"csv", "xls", "xlsx"}:
@@ -426,11 +371,15 @@ class LLMClient:
                 "For openai_compatible set OPENAI_COMPAT_BASE_URL and OPENAI_COMPAT_MODEL (and optionally OPENAI_COMPAT_API_KEY)."
             )
 
+        raw_max_out = (os.getenv("OPENAI_COMPAT_MAX_TOKENS") or "").strip()
+        max_out = int(raw_max_out) if raw_max_out.isdigit() and int(raw_max_out) > 0 else 8192
+
         llm = ChatOpenAI(
             base_url=base_url,
             api_key=api_key or None,
             model=model,
             temperature=0,
+            max_tokens=max_out,
         )
         with (trace.span("llm.openai_compatible", metadata={"provider": "openai_compatible", "model": model})
               if trace else _noop_context()):
@@ -453,7 +402,8 @@ class LLMClient:
         chat_url = f"{base_url}/chat/completions"
         raw_max_tokens = (os.getenv("GIGACHAT_MAX_TOKENS") or "").strip()
         max_tokens = int(raw_max_tokens) if raw_max_tokens else None
-        timeout_sec = int((os.getenv("GIGACHAT_TIMEOUT_SECONDS") or "90").strip() or "90")
+        # Large JSON schemas → large prompts; default 90s caused ReadTimeout then 500s behind proxies.
+        timeout_sec = int((os.getenv("GIGACHAT_TIMEOUT_SECONDS") or "600").strip() or "600")
 
         payload = {
             "model": model,
@@ -657,7 +607,7 @@ class LLMClient:
             return ""
 
         chat_url = f"{base_url}/chat/completions"
-        timeout_chat = int((os.getenv("GIGACHAT_TIMEOUT_SECONDS") or "120").strip() or "120")
+        timeout_chat = int((os.getenv("GIGACHAT_TIMEOUT_SECONDS") or "600").strip() or "600")
 
         payload: Dict[str, Any] = {
             "model": model,
