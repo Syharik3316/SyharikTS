@@ -8,10 +8,13 @@ the alias map (user strings first, then built-in).
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
 from app.utils.helpers import ensure_json_object
+
+from app.services.spreadsheet_output_schema import UNMAPPED_COLUMNS_KEY
 
 HEADER_ALIASES_META_KEY = "_headerAliases"
 
@@ -118,6 +121,8 @@ def collect_schema_field_keys(schema_obj: Any) -> set[str]:
                 if k == HEADER_ALIASES_META_KEY:
                     continue
                 keys.add(str(k))
+                if k == UNMAPPED_COLUMNS_KEY:
+                    continue
                 walk(v)
         elif isinstance(node, list) and node:
             walk(node[0])
@@ -177,6 +182,8 @@ def infer_header_aliases_from_extracted(
     used_norms: set[str] = set()
 
     for fk in sorted(field_keys):
+        if fk == UNMAPPED_COLUMNS_KEY:
+            continue
         if existing.get(fk):
             continue
         nk = _norm_header(fk)
@@ -230,3 +237,82 @@ def build_aliases_for_schema(
             if x not in cur:
                 cur.append(x)
     return aliases
+
+
+def build_spreadsheet_aliases_for_llm_prompt(
+    schema: dict[str, Any],
+    extracted: Any | None,
+    *,
+    source_keys: list[str] | None = None,
+    max_json_chars: int = 12_000,
+) -> dict[str, list[str]]:
+    """
+    Aliases embedded in the spreadsheet LLM prompt. Uses full CRM-backed aliases when small
+    enough; otherwise shrinks to user + inferred + CRM rows that plausibly match file headers
+    (avoids blowing the context window and breaking GigaChat).
+    """
+    full = build_aliases_for_schema(schema, extracted=extracted)
+    if len(json.dumps(full, ensure_ascii=False, separators=(",", ":"))) <= max_json_chars:
+        return full
+
+    schema = ensure_json_object(schema)
+    candidates = list(_collect_header_candidates(extracted))
+    if source_keys:
+        seen_c = set(candidates)
+        for s in source_keys:
+            t = str(s).strip()
+            if len(t) >= 2 and t not in seen_c:
+                seen_c.add(t)
+                candidates.append(t)
+    cand_norms = {_norm_header(h) for h in candidates}
+    cand_norms.discard("")
+
+    slim: dict[str, list[str]] = {}
+    user = parse_user_header_aliases(schema)
+    for k, lst in user.items():
+        if lst:
+            slim[k] = list(lst)
+
+    for key in collect_schema_field_keys(schema):
+        crm_vals = CRM_HEADER_ALIASES.get(key, [])
+        if not crm_vals:
+            continue
+        picked: list[str] = []
+        for alias in crm_vals:
+            an = _norm_header(alias)
+            if len(an) < 2:
+                continue
+            if an in cand_norms:
+                picked.append(alias)
+                continue
+            for cn in cand_norms:
+                if len(an) > 6 and len(cn) > 6 and (an in cn or cn in an):
+                    picked.append(alias)
+                    break
+        if picked:
+            cur = slim.setdefault(key, [])
+            for x in picked:
+                if x not in cur:
+                    cur.append(x)
+
+    inferred = infer_header_aliases_from_extracted(schema, extracted, slim)
+    for k, lst in inferred.items():
+        cur = slim.setdefault(k, [])
+        for x in lst:
+            if x not in cur:
+                cur.append(x)
+
+    if len(json.dumps(slim, ensure_ascii=False, separators=(",", ":"))) <= max_json_chars:
+        return slim
+
+    minimal: dict[str, list[str]] = {}
+    for k, lst in user.items():
+        if lst:
+            minimal[k] = list(lst)
+    inferred2 = infer_header_aliases_from_extracted(schema, extracted, minimal)
+    for k, lst in inferred2.items():
+        cur = minimal.setdefault(k, [])
+        for x in lst:
+            if x not in cur:
+                cur.append(x)
+    return minimal

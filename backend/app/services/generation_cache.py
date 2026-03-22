@@ -35,7 +35,7 @@ def get_effective_model_for_provider(provider: str) -> str:
 
 
 def build_generator_fingerprint(*, provider: str, model: str | None = None) -> str:
-    prompt_version = (os.getenv("PROMPT_VERSION") or "v1").strip() or "v1"
+    prompt_version = (os.getenv("PROMPT_VERSION") or "v3").strip() or "v3"
     effective_model = (model or get_effective_model_for_provider(provider) or "").strip()
     payload: dict[str, Any] = {
         "provider": (provider or "").strip().lower(),

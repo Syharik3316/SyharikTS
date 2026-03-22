@@ -40,6 +40,25 @@ def extract_typescript_code(text: str) -> str:
     return text.strip()
 
 
+def code_parses_base64_upload_as_json(code: str) -> bool:
+    """
+    Detect JSON.parse(atob(base64file)) and similar anti-patterns.
+    `base64file` is an encoded spreadsheet/document, not a JSON string.
+    """
+    if not code:
+        return False
+    low = code.lower()
+    if "json.parse(base64file)" in low:
+        return True
+    if re.search(r"json\.parse\s*\(\s*atob\s*\(", low):
+        return True
+    if re.search(r"json\.parse\s*\(\s*buffer\.from\s*\(\s*[^)]*base64file", low):
+        return True
+    if re.search(r"json\.parse\s*\([^)]*\bbase64file\b", low):
+        return True
+    return False
+
+
 def looks_like_incomplete_typescript(code: str) -> bool:
     """
     Heuristic check for truncated model output.

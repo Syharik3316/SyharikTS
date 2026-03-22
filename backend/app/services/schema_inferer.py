@@ -114,13 +114,41 @@ def infer_schema_from_extracted(file_kind: str, extracted_input_json: Any) -> Di
                 best_score = score
                 best = rec
 
-        first = best if isinstance(best, dict) else extracted_records[0]
+        first = best if isinstance(best, dict) else (extracted_records[0] if extracted_records else None)
         if not isinstance(first, dict) or not first:
             return {"value": "string"}
 
+        # Union of keys across all parsed rows so sparse/wide CSV rows do not drop columns
+        # that appear only in some lines (schema must cover the full extracted structure).
+        ordered_keys: list[str] = []
+        seen: set[str] = set()
+        for rec in extracted_records:
+            if not isinstance(rec, dict):
+                continue
+            for k in rec.keys():
+                sk = str(k).strip()
+                if not sk:
+                    continue
+                if sk not in seen:
+                    seen.add(sk)
+                    ordered_keys.append(sk)
+
+        def _sample_value_for_key(key: str) -> Any:
+            for rec in extracted_records:
+                if not isinstance(rec, dict) or key not in rec:
+                    continue
+                v = rec[key]
+                if v is None:
+                    continue
+                if isinstance(v, str) and not str(v).strip():
+                    continue
+                return v
+            return first.get(key, "")
+
         schema: Dict[str, Any] = {}
-        for k, v in first.items():
-            schema[str(k)] = _normalize_primitive_value(v, str(k))
+        for k in ordered_keys:
+            v = _sample_value_for_key(k)
+            schema[k] = _normalize_primitive_value(v, k)
         return schema
 
     return {"value": "string"}

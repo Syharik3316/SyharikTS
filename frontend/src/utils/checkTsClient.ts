@@ -61,9 +61,16 @@ export async function runTsCheckWithBase64(codeInput: string, inputBase64: strin
     const firstItem = res[0] ?? {};
     const actualKeys = firstItem && typeof firstItem === "object" ? Object.keys(firstItem as object) : [];
 
+    let inputArrayLength: number | undefined;
+    if (firstItem && typeof firstItem === "object" && "input" in firstItem) {
+      const inp = (firstItem as { input?: unknown }).input;
+      inputArrayLength = Array.isArray(inp) ? inp.length : undefined;
+    }
+
     return JSON.stringify(
       {
         itemsCount: res.length,
+        inputArrayLength,
         actualKeys,
         firstItem,
       },

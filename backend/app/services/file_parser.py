@@ -26,6 +26,7 @@ SUPPORTED_FILE_KINDS: tuple[str, ...] = (
     "epub",
     "fb2",
     "doc",
+    "unknown",
 )
 
 
@@ -113,6 +114,77 @@ def _limit_records(records: List[Dict[str, Any]], max_rows: int) -> List[Dict[st
     return records[:max_rows]
 
 
+def _merge_docx_kv_cells(prev: str, nxt: str) -> str:
+    p = (prev or "").strip()
+    n = (nxt or "").strip()
+    if not p:
+        return n
+    if not n:
+        return p
+    if n in p:
+        return p
+    return f"{p}\n{n}"
+
+
+def _disambiguate_docx_headers(headers: List[str]) -> List[str]:
+    out: List[str] = []
+    counts: Dict[str, int] = {}
+    for i, h in enumerate(headers):
+        base = (str(h or "").strip()) or f"col_{i + 1}"
+        n = counts.get(base, 0)
+        counts[base] = n + 1
+        out.append(base if n == 0 else f"{base}::{n}")
+    return out
+
+
+def _docx_header_row_is_uniform(headers: List[str]) -> bool:
+    cells = [str(h or "").strip() for h in headers]
+    non_empty = [h for h in cells if h]
+    return len(cells) >= 2 and len(set(non_empty)) <= 1 and bool(non_empty)
+
+
+def _extract_kv_records_from_raw_rows(raw_rows: List[Any]) -> List[Dict[str, str]]:
+    records: List[Dict[str, str]] = []
+    kv: Dict[str, str] = {}
+    current_key = ""
+
+    def flush() -> None:
+        nonlocal kv, current_key
+        if kv:
+            records.append(dict(kv))
+        kv = {}
+        current_key = ""
+
+    for row in raw_rows:
+        if not isinstance(row, list):
+            continue
+        cells = [str(c or "").strip() for c in row]
+        if not any(cells):
+            continue
+
+        left = cells[0] if len(cells) >= 1 else ""
+        right = cells[1] if len(cells) >= 2 else ""
+
+        if left and right:
+            if left in kv and str(kv.get(left, "")).strip() and str(right).strip():
+                flush()
+            current_key = left
+            kv[left] = _merge_docx_kv_cells(kv.get(left, ""), right)
+            continue
+
+        if not left and right and current_key:
+            kv[current_key] = _merge_docx_kv_cells(kv.get(current_key, ""), right)
+            continue
+
+        if current_key and len([c for c in cells if c]) == 1:
+            val = next((c for c in cells if c), "")
+            kv[current_key] = _merge_docx_kv_cells(kv.get(current_key, ""), val)
+
+    if kv:
+        records.append(kv)
+    return records
+
+
 def _to_records_dataframe(df: pd.DataFrame, max_rows: Optional[int]) -> List[Dict[str, Any]]:
     if max_rows is not None:
         df = df.head(max_rows)
@@ -146,9 +218,10 @@ def _detect_csv_delimiter(text_sample: str) -> str:
     return ";" if sample.count(";") >= sample.count(",") else ","
 
 
-def _read_csv_dataframe(contents: bytes, *, max_rows: Optional[int]) -> pd.DataFrame:
+def _read_csv_dataframe(contents: bytes, *, max_rows: Optional[int]) -> Tuple[pd.DataFrame, str]:
     """
     Read CSV with delimiter/encoding tolerance.
+    Returns (dataframe, detected_delimiter) for downstream TS generation.
     """
 
     decoded_text = ""
@@ -163,7 +236,7 @@ def _read_csv_dataframe(contents: bytes, *, max_rows: Optional[int]) -> pd.DataF
         decoded_text = contents.decode("utf-8", errors="replace")
 
     delimiter = _detect_csv_delimiter(decoded_text[:8000])
-    return pd.read_csv(
+    df = pd.read_csv(
         io.StringIO(decoded_text),
         sep=delimiter,
         nrows=max_rows,
@@ -171,6 +244,7 @@ def _read_csv_dataframe(contents: bytes, *, max_rows: Optional[int]) -> pd.DataF
         keep_default_na=False,
         engine="python",
     )
+    return df, delimiter
 
 
 def _decode_text_contents(contents: bytes) -> str:
@@ -381,44 +455,6 @@ def _records_from_doc_tables(tables: List[Dict[str, Any]], *, max_rows: Optional
     def _norm(s: Any) -> str:
         return re.sub(r"\s+", " ", str(s or "").strip().lower())
 
-    def _merge_value(prev: str, nxt: str) -> str:
-        p = (prev or "").strip()
-        n = (nxt or "").strip()
-        if not p:
-            return n
-        if not n:
-            return p
-        if n in p:
-            return p
-        return f"{p}\n{n}"
-
-    def _extract_kv_from_raw(raw_rows: List[Any]) -> Dict[str, str]:
-        kv: Dict[str, str] = {}
-        current_key = ""
-        for row in raw_rows:
-            if not isinstance(row, list):
-                continue
-            cells = [str(c or "").strip() for c in row]
-            if not any(cells):
-                continue
-
-            left = cells[0] if len(cells) >= 1 else ""
-            right = cells[1] if len(cells) >= 2 else ""
-
-            if left and right:
-                current_key = left
-                kv[current_key] = _merge_value(kv.get(current_key, ""), right)
-                continue
-
-            if not left and right and current_key:
-                kv[current_key] = _merge_value(kv.get(current_key, ""), right)
-                continue
-
-            if current_key and len([c for c in cells if c]) == 1:
-                val = next((c for c in cells if c), "")
-                kv[current_key] = _merge_value(kv.get(current_key, ""), val)
-        return kv
-
     def _is_meaningful_row_dict(row: Dict[str, Any]) -> bool:
         if not row:
             return False
@@ -432,16 +468,35 @@ def _records_from_doc_tables(tables: List[Dict[str, Any]], *, max_rows: Optional
 
     out: List[Dict[str, Any]] = []
     for table in tables:
+        raw = table.get("raw") if isinstance(table, dict) else None
+        if not isinstance(raw, list) or not raw:
+            continue
+
+        headers_raw = table.get("headers") if isinstance(table.get("headers"), list) else []
+        hdr_cells = [str(h or "").strip() for h in headers_raw]
+        uniform_hdr = _docx_header_row_is_uniform(hdr_cells)
+
+        row_records: List[Dict[str, Any]] = []
         rows = table.get("rows") if isinstance(table, dict) else None
-        if isinstance(rows, list):
+        if not uniform_hdr and isinstance(rows, list):
             for r in rows:
                 if isinstance(r, dict) and _is_meaningful_row_dict(r):
-                    out.append({str(k): str(v) for k, v in r.items()})
-        raw = table.get("raw") if isinstance(table, dict) else None
-        if isinstance(raw, list):
-            kv = _extract_kv_from_raw(raw)
-            if kv:
-                out.append(kv)
+                    row_records.append({str(k): str(v) for k, v in r.items()})
+
+        raw_for_kv = raw[1:] if uniform_hdr and len(raw) > 1 else raw
+        multi_kv = _extract_kv_records_from_raw_rows(raw_for_kv)
+
+        if uniform_hdr:
+            for kv in multi_kv:
+                if kv:
+                    out.append(kv)
+        elif row_records:
+            out.extend(row_records)
+        else:
+            for kv in multi_kv:
+                if kv:
+                    out.append(kv)
+
     if not out:
         return []
     return _limit_records(out, max_rows) if max_rows is not None else out
@@ -459,17 +514,53 @@ def extract_extracted_input_from_bytes(
     file_kind = detect_file_kind(filename, content_type)
 
     if file_kind in {"csv", "xls", "xlsx"}:
+        extra_meta: Dict[str, Any] = {}
         if file_kind == "csv":
-            df = _read_csv_dataframe(contents, max_rows=max_rows)
-        elif file_kind in {"xls", "xlsx"}:
+            try:
+                from app.services.sber_extract import parse_csv_dict_rows
+
+                raw_rows, csv_delim = parse_csv_dict_rows(contents)
+                extra_meta["csv_delimiter"] = csv_delim
+                capped = raw_rows if max_rows is None else raw_rows[:max_rows]
+                records = [{str(k): str(v) for k, v in r.items()} for r in capped]
+                records = _normalize_broken_semicolon_rows(records)
+                return file_kind, _unified_extracted_payload(
+                    file_kind=file_kind,
+                    records=records,
+                    extra_metadata=extra_meta,
+                )
+            except Exception:
+                df, csv_delim = _read_csv_dataframe(contents, max_rows=max_rows)
+                extra_meta["csv_delimiter"] = csv_delim
+                records = _to_records_dataframe(df, max_rows=max_rows)
+                records = _normalize_broken_semicolon_rows(records)
+                return file_kind, _unified_extracted_payload(
+                    file_kind=file_kind,
+                    records=records,
+                    extra_metadata=extra_meta,
+                )
+        elif file_kind == "xlsx":
+            try:
+                from app.services.sber_extract import parse_xlsx_dict_rows
+
+                raw_rows = parse_xlsx_dict_rows(contents, max_rows=max_rows)
+                records = [{str(k): str(v) for k, v in r.items()} for r in raw_rows]
+                records = _normalize_broken_semicolon_rows(records)
+                return file_kind, _unified_extracted_payload(file_kind=file_kind, records=records)
+            except Exception:
+                bytes_buf = io.BytesIO(contents)
+                df = pd.read_excel(bytes_buf, nrows=max_rows, dtype=str, sheet_name=0, engine=None)
+                records = _to_records_dataframe(df, max_rows=max_rows)
+                records = _normalize_broken_semicolon_rows(records)
+                return file_kind, _unified_extracted_payload(file_kind=file_kind, records=records)
+        elif file_kind == "xls":
             bytes_buf = io.BytesIO(contents)
             df = pd.read_excel(bytes_buf, nrows=max_rows, dtype=str, sheet_name=0, engine=None)
+            records = _to_records_dataframe(df, max_rows=max_rows)
+            records = _normalize_broken_semicolon_rows(records)
+            return file_kind, _unified_extracted_payload(file_kind=file_kind, records=records)
         else:
             raise ValueError("Unsupported spreadsheet kind")
-
-        records = _to_records_dataframe(df, max_rows=max_rows)
-        records = _normalize_broken_semicolon_rows(records)
-        return file_kind, _unified_extracted_payload(file_kind=file_kind, records=records)
 
     if file_kind in {"txt", "md"}:
         text = _normalize_newlines(_decode_text_contents(contents))
@@ -516,24 +607,37 @@ def extract_extracted_input_from_bytes(
         )
 
     if file_kind == "pdf":
-        from PyPDF2 import PdfReader
+        from app.services.sber_extract import extract_fatca_row_from_text, extract_pdf_text_pypdf, looks_like_fatca_text
 
-        bytes_buf = io.BytesIO(contents)
-        reader = PdfReader(bytes_buf)
-        texts: List[str] = []
-        pages = reader.pages if max_rows is None else reader.pages[: max(1, max_rows)]
-        for page in pages:
-            try:
-                texts.append(page.extract_text() or "")
-            except Exception:
-                texts.append("")
-        text = _truncate_text(_normalize_newlines("\n".join(texts).strip()), max_text_chars)
+        text = ""
+        try:
+            text = extract_pdf_text_pypdf(contents)
+        except Exception:
+            text = ""
+        if not (text or "").strip():
+            from PyPDF2 import PdfReader
+
+            bytes_buf = io.BytesIO(contents)
+            reader = PdfReader(bytes_buf)
+            texts: List[str] = []
+            pages = reader.pages if max_rows is None else reader.pages[: max(1, max_rows)]
+            for page in pages:
+                try:
+                    texts.append(page.extract_text() or "")
+                except Exception:
+                    texts.append("")
+            text = "\n".join(texts).strip()
+        text = _truncate_text(_normalize_newlines(text), max_text_chars)
         if not text.strip():
             raise ParseFileError(
                 code="TEXT_DECODE_FAILED",
                 message="Failed to extract text from PDF file. The document may be scanned/image-only or protected.",
             )
         records = _records_from_text_key_value(text, max_rows=max_rows)
+        if looks_like_fatca_text(text):
+            fr = extract_fatca_row_from_text(text)
+            if any(str(fr.get(k, "")).strip() for k in fr):
+                records = [fr] + [r for r in (records or []) if r]
         return file_kind, _unified_extracted_payload(file_kind=file_kind, text=text, records=records)
 
     if file_kind == "docx":
@@ -554,16 +658,16 @@ def extract_extracted_input_from_bytes(
                 for cell in row.cells:
                     row_data.append((cell.text or "").strip())
                 table_data.append(row_data)
-            headers: List[str] = table_data[0] if table_data else []
+            headers_raw: List[str] = [str(c or "") for c in (table_data[0] if table_data else [])]
+            headers = _disambiguate_docx_headers(headers_raw)
             rows: List[Dict[str, str]] = []
-            if headers and len(table_data) > 1 and any(h for h in headers):
+            if headers and len(table_data) > 1 and any(str(h or "").strip() for h in headers):
                 for raw_row in table_data[1:]:
                     row_obj: Dict[str, str] = {}
                     for idx, header in enumerate(headers):
-                        key = (header or "").strip() or f"col_{idx + 1}"
-                        row_obj[key] = raw_row[idx] if idx < len(raw_row) else ""
+                        row_obj[header] = raw_row[idx] if idx < len(raw_row) else ""
                     rows.append(row_obj)
-            tables.append({"headers": headers, "rows": rows, "raw": table_data})
+            tables.append({"headers": headers_raw, "rows": rows, "raw": table_data})
 
         text = _truncate_text(_normalize_newlines("\n".join(paragraphs).strip()), max_text_chars)
         records = _records_from_doc_tables(tables, max_rows=max_rows)
@@ -572,10 +676,62 @@ def extract_extracted_input_from_bytes(
         return file_kind, _unified_extracted_payload(file_kind=file_kind, text=text, tables=tables, records=records)
 
     if file_kind in {"png", "jpg", "tiff"}:
+        from app.services.sber_extract import extract_image_table_rows_best_effort, ocr_text_from_image_variants
+
+        try:
+            table_rows = extract_image_table_rows_best_effort(contents)
+        except Exception:
+            table_rows = []
+        if table_rows:
+            capped = table_rows if max_rows is None else table_rows[:max_rows]
+            records = [{str(k): str(v) for k, v in r.items()} for r in capped]
+            preview = "\n".join(" | ".join(r.values()) for r in records[:5])
+            text = _truncate_text(_normalize_newlines(preview), max_text_chars)
+            return file_kind, _unified_extracted_payload(
+                file_kind=file_kind,
+                text=text,
+                records=records,
+                extra_metadata={"image_extraction": "img2table"},
+            )
+
+        text_sber = ""
+        try:
+            text_sber = ocr_text_from_image_variants(contents)
+        except Exception:
+            text_sber = ""
+        if (text_sber or "").strip():
+            text = _truncate_text(_normalize_newlines(text_sber), max_text_chars)
+            records = _records_from_ocr_text(text, max_rows=max_rows)
+            return file_kind, _unified_extracted_payload(
+                file_kind=file_kind,
+                text=text,
+                records=records,
+                extra_metadata={"image_extraction": "sber_ocr_variants"},
+            )
+
         text = _extract_image_transcript(contents, file_kind)
         text = _truncate_text(_normalize_newlines(text), max_text_chars)
         records = _records_from_ocr_text(text, max_rows=max_rows)
         return file_kind, _unified_extracted_payload(file_kind=file_kind, text=text, records=records)
+
+    if file_kind == "unknown":
+        try:
+            text = _normalize_newlines(_decode_text_contents(contents))
+        except Exception:
+            text = ""
+        text = _truncate_text(text, max_text_chars)
+        if not (text or "").strip():
+            raise ParseFileError(
+                code="UNSUPPORTED_FILE_TYPE",
+                message=f"Unsupported file type. Supported: {', '.join(SUPPORTED_FILE_KINDS)}",
+            )
+        records = _records_from_text_key_value(text, max_rows=max_rows)
+        return "unknown", _unified_extracted_payload(
+            file_kind="unknown",
+            text=text,
+            records=records,
+            warnings=["unknown_extension_decoded_as_text"],
+        )
 
     raise ParseFileError(
         code="UNSUPPORTED_FILE_TYPE",

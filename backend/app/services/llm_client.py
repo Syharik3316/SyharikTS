@@ -10,7 +10,12 @@ import requests
 import urllib3
 from urllib3.exceptions import InsecureRequestWarning
 
-from app.services.langfuse_client import LangfuseTrace, build_safe_prompt_preview
+from app.services.langfuse_client import (
+    LangfuseTrace,
+    apply_llm_output_to_langfuse_observation,
+    apply_usage_to_langfuse_observation,
+    build_safe_prompt_preview,
+)
 from app.services.schema_aliases import (
     CRM_HEADER_ALIASES,
     build_aliases_for_schema,
@@ -18,10 +23,36 @@ from app.services.schema_aliases import (
     strip_schema_meta_for_output,
 )
 from app.utils.helpers import (
+    code_parses_base64_upload_as_json,
     extract_typescript_code,
     looks_like_incomplete_typescript,
     ensure_json_object,
 )
+
+
+def _csv_delimiter_for_ts_stub(extracted_obj: dict[str, Any]) -> str:
+    meta = extracted_obj.get("metadata") if isinstance(extracted_obj.get("metadata"), dict) else {}
+    raw = meta.get("csv_delimiter", ";")
+    if not isinstance(raw, str) or len(raw) != 1:
+        return ";"
+    if raw in {",", ";", "\t", "|"}:
+        return raw
+    return ";"
+
+
+def _ts_char_literal_for_embed(ch: str) -> str:
+    """Single-character JSON string literal safe to embed in generated TypeScript source."""
+    return json.dumps(ch)
+
+
+def _typescript_generation_system_prompt() -> str:
+    return (
+        "You output TypeScript source only: one default-exported function "
+        "(base64file: string) => DealData[]. The user message gives a JSON example of the output shape and parsed-file "
+        "hints — you design the full implementation (helpers, parsing, mapping). "
+        "Never call JSON.parse on base64file or on atob(base64file): the argument is an encoded file, not JSON text. "
+        "Types must be explicit; do not use any. No markdown code fences, no commentary outside the program text."
+    )
 
 
 class LLMClient:
@@ -100,9 +131,9 @@ class LLMClient:
             return True
 
         low = code.lower()
-        document_kinds = {"pdf", "docx", "txt", "md", "rtf", "odt", "xml", "epub", "fb2", "doc"}
+        document_kinds = {"pdf", "docx", "txt", "md", "rtf", "odt", "xml", "epub", "fb2", "doc", "unknown"}
 
-        if "json.parse(base64file)" in low:
+        if code_parses_base64_upload_as_json(code):
             return True
 
         if "void base64file;" in low:
@@ -113,9 +144,13 @@ class LLMClient:
         if "\\p{l}" in low or "\\p{n}" in low:
             return True
 
-        has_decode = "decodebase64" in low or "buffer.from(base64file" in low or "atob(" in low
+        has_decode = (
+            "decodebase64" in low
+            or "buffer.from(" in low
+            or "atob(" in low
+        )
         has_parse = "parsecsv" in low or "split(';')" in low or "separator" in low
-        has_typed_return = "dealdata[]" in code
+        has_typed_return = "dealdata[]" in low
         if file_kind in {"csv", "xls", "xlsx"}:
             if not (has_decode and has_parse and has_typed_return):
                 return True
@@ -164,6 +199,8 @@ class LLMClient:
             separators=(",", ":"),
         )
         extracted_compact = json.dumps(extracted_obj, ensure_ascii=False, separators=(",", ":"))
+        csv_sep = _csv_delimiter_for_ts_stub(extracted_obj) if file_kind == "csv" else ";"
+        csv_sep_lit = _ts_char_literal_for_embed(csv_sep)
 
         if file_kind not in {"csv", "xls", "xlsx"}:
             return (
@@ -184,7 +221,11 @@ class LLMClient:
                 "      for (const [rk, rv] of Object.entries(row || {})) {\n"
                 "        const got = norm(rk);\n"
                 "        if (got === want) return rv;\n"
-                "        if (!shortKey && (got.includes(want) || want.includes(got))) return rv;\n"
+                "        if (!shortKey) {\n"
+                "          if (got.includes(want)) return rv;\n"
+                "          const minSub = 22;\n"
+                "          if (want.includes(got) && got.length >= minSub) return rv;\n"
+                "        }\n"
                 "      }\n"
                 "    }\n"
                 "    return row[key];\n"
@@ -207,10 +248,26 @@ class LLMClient:
                 "    }\n"
                 "    return \"\";\n"
                 "  };\n"
+                "  const codesFromEnumLikeText = (raw: string): string[] => {\n"
+                "    const s = String(raw);\n"
+                "    const out: string[] = [];\n"
+                "    const push = (c: string): void => { if (!out.includes(c)) out.push(c); };\n"
+                "    if (/неотделимым\\s+от\\s+собственника|disregarded\\s+entity/i.test(s)) push(\"IS_DISREGARDED_ENTITY\");\n"
+                "    if (/иностранным\\s+финансовым\\s+институтом/i.test(s) || /foreign\\s+financial\\s+institution/i.test(s)) push(\"IS_FATCA_FOREIGN_INSTITUTE\");\n"
+                "    if (/более\\s*10\\s*%[\\s\\S]{0,80}акци|10%\\s*акций|ten\\s+or\\s+more\\s+percent/i.test(s)) push(\"TEN_OR_MORE_PERCENT_IN_USA\");\n"
+                "    if (/не\\s+применимы|утвержден(ия|ие)\\s+не\\s+применимы|statements?_?not_?appilcable/i.test(s)) push(\"STATEMENTS_NOT_APPILCABLE\");\n"
+                "    return out;\n"
+                "  };\n"
                 "  const cast = (v: unknown, ex: unknown): unknown => {\n"
                 "    if (Array.isArray(ex)) {\n"
                 "      const itemEx = ex.length ? ex[0] : \"\";\n"
-                "      return Array.isArray(v) ? v.map((x) => cast(x, itemEx)) : [];\n"
+                "      if (Array.isArray(v)) return v.map((x) => cast(x, itemEx));\n"
+                "      const blob = String(v ?? \"\").trim();\n"
+                "      if (blob && typeof itemEx === \"string\" && /^[A-Z][A-Z0-9_]+$/.test(itemEx)) {\n"
+                "        const parsed = codesFromEnumLikeText(blob);\n"
+                "        if (parsed.length) return parsed;\n"
+                "      }\n"
+                "      return [];\n"
                 "    }\n"
                 "    if (ex === null) { const t = String(v ?? \"\").trim(); return t ? String(v) : null; }\n"
                 "    if (typeof ex === \"number\") return toNum(v);\n"
@@ -226,10 +283,18 @@ class LLMClient:
                 "  };\n"
                 "  if (Array.isArray((schema as Record<string, unknown>).input)) {\n"
                 "    const itemEx = (((schema as Record<string, unknown>).input as unknown[]) || [])[0] ?? {};\n"
-                "    const mapped = records.map((r) => {\n"
+                "    const itemKeys = Object.keys((itemEx && typeof itemEx === \"object\") ? (itemEx as Record<string, unknown>) : {});\n"
+                "    const hasOrg = (src: Record<string, unknown>): boolean => {\n"
+                "      const org = String(pick(src, \"organizationName\") ?? \"\").trim();\n"
+                "      const inn = String(pick(src, \"innOrKio\") ?? \"\").replace(/\\D/g, \"\");\n"
+                "      return org.length >= 2 || inn.length >= 8;\n"
+                "    };\n"
+                "    const mapped = records\n"
+                "      .filter((r) => hasOrg((r && typeof r === \"object\") ? (r as Record<string, unknown>) : {}))\n"
+                "      .map((r) => {\n"
                 "      const src = (r && typeof r === \"object\") ? (r as Record<string, unknown>) : {};\n"
                 "      const aligned: Record<string, unknown> = {};\n"
-                "      for (const k of Object.keys((itemEx && typeof itemEx === \"object\") ? (itemEx as Record<string, unknown>) : {})) {\n"
+                "      for (const k of itemKeys) {\n"
                 "        aligned[k] = pick(src, k);\n"
                 "      }\n"
                 "      return cast(aligned, itemEx);\n"
@@ -238,18 +303,37 @@ class LLMClient:
                 "    out.input = mapped;\n"
                 "    return [out as DealData];\n"
                 "  }\n"
+                "  if (records.length) {\n"
+                "    const outRows: DealData[] = [];\n"
+                "    for (const row of records) {\n"
+                "      const src = (row && typeof row === \"object\") ? (row as Record<string, unknown>) : {};\n"
+                "      const rowOut = (dflt(schema) as Record<string, unknown>);\n"
+                "      const aligned: Record<string, unknown> = {};\n"
+                "      for (const k of Object.keys(schema)) aligned[k] = pick(src, k);\n"
+                "      const mapped = cast(aligned, schema) as Record<string, unknown>;\n"
+                "      for (const [k, v] of Object.entries(mapped)) rowOut[k] = v;\n"
+                "      outRows.push(rowOut as DealData);\n"
+                "    }\n"
+                "    return outRows;\n"
+                "  }\n"
                 "  const out = (dflt(schema) as Record<string, unknown>);\n"
-                "  const row0 = records[0] ?? {};\n"
-                "  const alignedRow0: Record<string, unknown> = {};\n"
-                "  for (const k of Object.keys(schema)) alignedRow0[k] = pick((row0 && typeof row0 === \"object\") ? (row0 as Record<string, unknown>) : {}, k);\n"
-                "  const mapped = cast(alignedRow0, schema) as Record<string, unknown>;\n"
-                "  for (const [k, v] of Object.entries(mapped)) out[k] = v;\n"
-                "  if (!records.length && text) {\n"
+                "  if (text) {\n"
+                "    const lowerText = text.toLowerCase();\n"
                 "    for (const key of Object.keys(out)) {\n"
                 "      if (typeof out[key] === \"string\" && !String(out[key] || \"\").trim()) {\n"
-                "        const r = new RegExp(`${key}\\\\s*[:\\\\-]\\\\s*([^\\\\n;]+)`, \"i\");\n"
-                "        const m = text.match(r);\n"
-                "        if (m) out[key] = m[1].trim();\n"
+                "        const candidates = [key, ...(aliases[key] ?? [])];\n"
+                "        for (const label of candidates) {\n"
+                "          const lb = String(label);\n"
+                "          if (!lb.trim()) continue;\n"
+                "          const pos = lowerText.indexOf(lb.toLowerCase());\n"
+                "          if (pos < 0) continue;\n"
+                "          const tail = text.slice(pos + lb.length);\n"
+                "          const m = tail.match(/^\\\\s*[:\\\\-]\\\\s*([^\\\\n;]+)/i);\n"
+                "          if (m) {\n"
+                "            out[key] = m[1].trim();\n"
+                "            break;\n"
+                "          }\n"
+                "        }\n"
                 "      }\n"
                 "    }\n"
                 "  }\n"
@@ -284,6 +368,7 @@ class LLMClient:
             "    if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);\n"
             "    return text;\n"
             "  };\n"
+            f"  const csvSep = {csv_sep_lit};\n"
             "  const parseCsv = (text: string): string[][] => {\n"
             "    const rows: string[][] = [];\n"
             "    let row: string[] = [];\n"
@@ -293,7 +378,7 @@ class LLMClient:
             "      const ch = text[i];\n"
             "      if (ch === '\"') {\n"
             "        if (inQuotes && text[i + 1] === '\"') { cell += '\"'; i++; } else { inQuotes = !inQuotes; }\n"
-            "      } else if (ch === ';' && !inQuotes) {\n"
+            "      } else if (ch === csvSep && !inQuotes) {\n"
             "        row.push(cell); cell = \"\";\n"
             "      } else if ((ch === '\\n' || ch === '\\r') && !inQuotes) {\n"
             "        if (ch === '\\r' && text[i + 1] === '\\n') i++;\n"
@@ -308,20 +393,40 @@ class LLMClient:
             "    if (row.some((x) => x !== \"\")) rows.push(row);\n"
             "    return rows;\n"
             "  };\n"
-            "  const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9а-яё]+/gi, \"\");\n"
-            "  const toNumber = (s: string): number => {\n"
-            "    const n = Number(String(s || \"\").trim().replace(/\\s+/g, \"\").replace(\",\", \".\"));\n"
+            "  const norm = (s: unknown): string => String(s ?? \"\").toLowerCase().replace(/[^a-z0-9а-яё]+/gi, \"\");\n"
+            "  const toNum = (v: unknown): number => {\n"
+            "    const n = Number(String(v ?? \"\").trim().replace(/\\s+/g, \"\").replace(\",\", \".\"));\n"
             "    return Number.isFinite(n) ? n : 0;\n"
             "  };\n"
-            "  const toBoolean = (s: string): boolean => [\"1\",\"true\",\"yes\",\"y\",\"да\"].includes(String(s || \"\").trim().toLowerCase());\n"
-            "  const cast = (value: string, example: unknown): unknown => {\n"
-            "    if (typeof example === \"number\") return toNumber(value);\n"
-            "    if (typeof example === \"boolean\") return toBoolean(value);\n"
-            "    if (example === null) {\n"
-            "      const t = String(value || \"\").trim();\n"
-            "      return t === \"\" ? null : t;\n"
+            "  const toBool = (v: unknown): boolean => [\"1\",\"true\",\"yes\",\"y\",\"да\"].includes(String(v ?? \"\").trim().toLowerCase());\n"
+            "  const cast = (v: unknown, ex: unknown): unknown => {\n"
+            "    if (Array.isArray(ex)) {\n"
+            "      const itemEx = ex.length ? ex[0] : \"\";\n"
+            "      if (Array.isArray(v)) return v.map((x) => cast(x, itemEx));\n"
+            "      const s = String(v ?? \"\").trim();\n"
+            "      if (!s) return [];\n"
+            "      const parts = s.split(/[;|]/).map((x) => x.trim()).filter(Boolean);\n"
+            "      return parts.map((x) => cast(x, itemEx));\n"
             "    }\n"
-            "    return String(value ?? \"\");\n"
+            "    if (ex === null) { const t = String(v ?? \"\").trim(); return t ? String(v) : null; }\n"
+            "    if (typeof ex === \"number\") return toNum(v);\n"
+            "    if (typeof ex === \"boolean\") return toBool(v);\n"
+            "    if (typeof ex === \"string\") return String(v ?? \"\");\n"
+            "    if (ex && typeof ex === \"object\") {\n"
+            "      const src = (v && typeof v === \"object\") ? (v as Record<string, unknown>) : {};\n"
+            "      const o: Record<string, unknown> = {};\n"
+            "      for (const [k, sub] of Object.entries(ex as Record<string, unknown>)) o[k] = cast(src[k], sub);\n"
+            "      return o;\n"
+            "    }\n"
+            "    return v;\n"
+            "  };\n"
+            "  const cellRaw = (line: string[], key: string): string => {\n"
+            "    const names = [key, ...(aliases[key] ?? [])];\n"
+            "    for (const name of names) {\n"
+            "      const found = idxByHeader.get(norm(name));\n"
+            "      if (found !== undefined) return String(line[found] ?? \"\");\n"
+            "    }\n"
+            "    return \"\";\n"
             "  };\n"
             "  const csv = decodeBase64(base64file);\n"
             "  const table = parseCsv(csv);\n"
@@ -329,28 +434,69 @@ class LLMClient:
             "  const headers = table[0].map((h) => String(h ?? \"\").trim());\n"
             "  const idxByHeader = new Map<string, number>();\n"
             "  headers.forEach((h, i) => idxByHeader.set(norm(h), i));\n"
-            "  const keys = Object.keys(schema);\n"
+            "  const fillUnmappedColumns = (line: string[], hdrs: string[], schemaKeys: string[]): Record<string, string> => {\n"
+            "    const ex: Record<string, string> = {};\n"
+            "    for (let i = 0; i < hdrs.length; i++) {\n"
+            "      const hn = norm(hdrs[i]);\n"
+            "      if (!hn) continue;\n"
+            "      let unused = true;\n"
+            "      for (const key of schemaKeys) {\n"
+            "        const names = [key, ...(aliases[key] ?? [])];\n"
+            "        for (const nm of names) {\n"
+            "          if (norm(nm) === hn) {\n"
+            "            unused = false;\n"
+            "            break;\n"
+            "          }\n"
+            "        }\n"
+            "        if (!unused) break;\n"
+            "      }\n"
+            "      if (unused) {\n"
+            "        const rh = String(hdrs[i] ?? \"\").trim();\n"
+            "        if (rh) ex[rh] = String(line[i] ?? \"\");\n"
+            "      }\n"
+            "    }\n"
+            "    return ex;\n"
+            "  };\n"
             "  const result: DealData[] = [];\n"
+            "  if (Array.isArray((schema as Record<string, unknown>).input)) {\n"
+            "    const itemEx = (((schema as Record<string, unknown>).input as unknown[]) || [])[0] ?? {};\n"
+            "    const itemKeys = Object.keys((itemEx && typeof itemEx === \"object\") ? (itemEx as Record<string, unknown>) : {})\n"
+            "      .filter((k) => k !== \"unmappedColumns\");\n"
+            "    for (let r = 1; r < table.length; r++) {\n"
+            "      const line = table[r];\n"
+            "      const aligned: Record<string, unknown> = {};\n"
+            "      for (const k of itemKeys) {\n"
+            "        if (k === \"dealStageFinal\") {\n"
+            "          const stageIdx = idxByHeader.get(norm(\"Стадия (Сделка)\"));\n"
+            "          const stageRaw = stageIdx === undefined ? \"\" : String(line[stageIdx] ?? \"\");\n"
+            "          const st = stageRaw.trim().toLowerCase();\n"
+            "          aligned[k] = st === \"закрыта\" || st === \"отклонена\";\n"
+            "        } else {\n"
+            "          aligned[k] = cellRaw(line, k);\n"
+            "        }\n"
+            "      }\n"
+            "      const rowObj = cast(aligned, itemEx) as Record<string, unknown>;\n"
+            "      rowObj.unmappedColumns = fillUnmappedColumns(line, headers, itemKeys);\n"
+            "      result.push({ input: [rowObj] } as DealData);\n"
+            "    }\n"
+            "    return result;\n"
+            "  }\n"
+            "  const keys = Object.keys(schema).filter((k) => k !== \"unmappedColumns\");\n"
             "  for (let r = 1; r < table.length; r++) {\n"
             "    const line = table[r];\n"
             "    const obj: Record<string, unknown> = {};\n"
             "    for (const key of keys) {\n"
-            "      const names = [key, ...(aliases[key] ?? [])];\n"
-            "      let idx: number | undefined = undefined;\n"
-            "      for (const name of names) {\n"
-            "        const found = idxByHeader.get(norm(name));\n"
-            "        if (found !== undefined) { idx = found; break; }\n"
-            "      }\n"
-            "      const raw = idx === undefined ? \"\" : String(line[idx] ?? \"\");\n"
             "      if (key === \"dealStageFinal\") {\n"
             "        const stageIdx = idxByHeader.get(norm(\"Стадия (Сделка)\"));\n"
             "        const stageRaw = stageIdx === undefined ? \"\" : String(line[stageIdx] ?? \"\");\n"
             "        const st = stageRaw.trim().toLowerCase();\n"
             "        obj[key] = st === \"закрыта\" || st === \"отклонена\";\n"
             "      } else {\n"
+            "        const raw = cellRaw(line, key);\n"
             "        obj[key] = cast(raw, schema[key]);\n"
             "      }\n"
             "    }\n"
+            "    obj.unmappedColumns = fillUnmappedColumns(line, headers, keys);\n"
             "    result.push(obj as DealData);\n"
             "  }\n"
             "  return result;\n"
@@ -360,7 +506,7 @@ class LLMClient:
     def _generate_via_openai_compatible(self, prompt: str) -> str:
         trace = self._active_trace
         from langchain_openai import ChatOpenAI
-        from langchain_core.messages import HumanMessage
+        from langchain_core.messages import HumanMessage, SystemMessage
 
         base_url = os.getenv("OPENAI_COMPAT_BASE_URL", "").strip()
         api_key = os.getenv("OPENAI_COMPAT_API_KEY", "").strip()
@@ -381,10 +527,25 @@ class LLMClient:
             temperature=0,
             max_tokens=max_out,
         )
-        with (trace.span("llm.openai_compatible", metadata={"provider": "openai_compatible", "model": model})
-              if trace else _noop_context()):
-            msg = llm.invoke([HumanMessage(content=prompt)])
-        self.last_usage = self._extract_usage_from_langchain_message(msg)
+        with (
+            trace.span(
+                "llm.openai_compatible",
+                as_type="generation",
+                model=model,
+                metadata={"provider": "openai_compatible", "model": model},
+            )
+            if trace
+            else _noop_context()
+        ) as gen:
+            msg = llm.invoke(
+                [SystemMessage(content=_typescript_generation_system_prompt()), HumanMessage(content=prompt)]
+            )
+            self.last_usage = self._extract_usage_from_langchain_message(msg)
+            raw_out = msg.content
+            if not isinstance(raw_out, str):
+                raw_out = "" if raw_out is None else str(raw_out)
+            apply_llm_output_to_langfuse_observation(gen, raw_out)
+            apply_usage_to_langfuse_observation(gen, self.last_usage)
         return extract_typescript_code(msg.content or "")
 
     def _generate_via_gigachat(self, prompt: str, *, file_kind: str, schema_obj: Any) -> str:
@@ -401,13 +562,22 @@ class LLMClient:
 
         chat_url = f"{base_url}/chat/completions"
         raw_max_tokens = (os.getenv("GIGACHAT_MAX_TOKENS") or "").strip()
-        max_tokens = int(raw_max_tokens) if raw_max_tokens else None
+        max_tokens: int | None
+        try:
+            max_tokens = int(raw_max_tokens) if raw_max_tokens else None
+            if max_tokens is not None and max_tokens <= 0:
+                max_tokens = None
+        except ValueError:
+            max_tokens = None
         # Large JSON schemas → large prompts; default 90s caused ReadTimeout then 500s behind proxies.
         timeout_sec = int((os.getenv("GIGACHAT_TIMEOUT_SECONDS") or "600").strip() or "600")
 
         payload = {
             "model": model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [
+                {"role": "system", "content": _typescript_generation_system_prompt()},
+                {"role": "user", "content": prompt},
+            ],
             "stream": False,
             "temperature": 0,
             "n": 1,
@@ -422,48 +592,57 @@ class LLMClient:
             "Authorization": auth_header,
         }
 
-        if trace:
-            with trace.span(
+        content = ""
+        cm = (
+            trace.span(
                 "llm.gigachat.primary_call",
+                as_type="generation",
+                model=model,
                 input_data=build_safe_prompt_preview(prompt),
                 metadata={"provider": "gigachat", "model": model, "file_kind": file_kind},
-            ):
-                resp = requests.post(chat_url, headers=headers, json=payload, timeout=timeout_sec, verify=verify_tls)
-        else:
-            resp = requests.post(chat_url, headers=headers, json=payload, timeout=timeout_sec, verify=verify_tls)
-        if resp.status_code != 200:
-            try:
-                body = resp.json()
-            except Exception:
-                body = None
-            msg = ""
-            if isinstance(body, dict):
-                msg = body.get("error", {}).get("message") or body.get("message") or json.dumps(body)
-            raise RuntimeError(f"GigaChat chat error {resp.status_code}: {msg or resp.text[:300]}")
-
-        data = resp.json()
-        self.last_usage = self._extract_usage_from_payload(data)
-        content = ""
-        if isinstance(data, dict):
-            choices = data.get("choices") or []
-            if choices and isinstance(choices, list):
-                first = choices[0] or {}
-                message = first.get("message") or {}
-                content = message.get("content") or ""
-
-        if not content:
-            raise RuntimeError("GigaChat returned empty content")
-
-        if int(self.last_usage.get("total_tokens") or 0) <= 0:
-            prompt_tokens = self._count_tokens_via_gigachat_api(prompt, model=model, auth_header=auth_header, verify_tls=verify_tls)
-            completion_tokens = self._count_tokens_via_gigachat_api(
-                content, model=model, auth_header=auth_header, verify_tls=verify_tls
             )
-            self.last_usage = {
-                "prompt_tokens": int(prompt_tokens or 0),
-                "completion_tokens": int(completion_tokens or 0),
-                "total_tokens": int((prompt_tokens or 0) + (completion_tokens or 0)),
-            }
+            if trace
+            else _noop_context()
+        )
+        with cm as gen:
+            resp = requests.post(chat_url, headers=headers, json=payload, timeout=timeout_sec, verify=verify_tls)
+            if resp.status_code != 200:
+                try:
+                    body = resp.json()
+                except Exception:
+                    body = None
+                msg = ""
+                if isinstance(body, dict):
+                    msg = body.get("error", {}).get("message") or body.get("message") or json.dumps(body)
+                raise RuntimeError(f"GigaChat chat error {resp.status_code}: {msg or resp.text[:300]}")
+
+            data = resp.json()
+            self.last_usage = self._extract_usage_from_payload(data)
+            if isinstance(data, dict):
+                choices = data.get("choices") or []
+                if choices and isinstance(choices, list):
+                    first = choices[0] or {}
+                    message = first.get("message") or {}
+                    raw_c = message.get("content")
+                    content = raw_c if isinstance(raw_c, str) else ("" if raw_c is None else str(raw_c))
+
+            if not content:
+                raise RuntimeError("GigaChat returned empty content")
+
+            if int(self.last_usage.get("total_tokens") or 0) <= 0:
+                prompt_tokens = self._count_tokens_via_gigachat_api(
+                    prompt, model=model, auth_header=auth_header, verify_tls=verify_tls
+                )
+                completion_tokens = self._count_tokens_via_gigachat_api(
+                    content, model=model, auth_header=auth_header, verify_tls=verify_tls
+                )
+                self.last_usage = {
+                    "prompt_tokens": int(prompt_tokens or 0),
+                    "completion_tokens": int(completion_tokens or 0),
+                    "total_tokens": int((prompt_tokens or 0) + (completion_tokens or 0)),
+                }
+            apply_llm_output_to_langfuse_observation(gen, content)
+            apply_usage_to_langfuse_observation(gen, self.last_usage)
         code = extract_typescript_code(content)
 
         # Retry several times with escalating instructions when output is truncated or invalid.
@@ -475,31 +654,30 @@ class LLMClient:
         ):
             attempt += 1
             if attempt == 1:
-                correction = (
-                    "Previous output invalid. Keep function signature; regenerate full deterministic TypeScript."
-                )
+                correction = "Previous output invalid. Keep `export default function (base64file: string): DealData[]`; regenerate complete TypeScript."
             elif attempt == 2:
                 correction = (
-                    "Previous output still invalid. Preserve schema shape exactly (especially nested arrays/objects). Never flatten to scalars."
+                    "Previous output still invalid. Match the DealData / JSON example shape (nested arrays/objects). Never flatten to scalars."
                 )
             else:
                 correction = (
-                    "Previous output rejected again. Return FULL TypeScript with strict schema-shape preservation. No markdown/explanations/placeholders."
+                    "Previous output rejected again. Return FULL TypeScript only. No markdown, explanations, or placeholders."
                 )
+            doc_hint = (
+                "If FILE_KIND is a document (pdf/docx/txt/rtf/images/etc): do NOT use parseCsv/split-by-delimiter as the main path. "
+                "Use PARSED_FILE_PREVIEW / extracted.records and map to DealData.\n"
+            )
             retry_payload = {
                 "model": model,
                 "messages": [
+                    {"role": "system", "content": _typescript_generation_system_prompt()},
                     {
                         "role": "user",
                         "content": (
-                            (
-                                f"{correction} "
-                                "If this is a document format (pdf/docx/txt/rtf/etc), do NOT generate CSV parser logic "
-                                "(no parseCsv/split(';')/separator parser).\n"
-                            )
+                            f"{correction} {doc_hint}"
                             + prompt
                         ),
-                    }
+                    },
                 ],
                 "stream": False,
                 "temperature": 0,
@@ -509,19 +687,20 @@ class LLMClient:
             }
             if max_tokens and max_tokens > 0:
                 retry_payload["max_tokens"] = max_tokens
-            if trace:
-                with trace.span(
+            retry_resp = None
+            retry_data: Any = None
+            retry_content = ""
+            cm_retry = (
+                trace.span(
                     "llm.gigachat.retry_call",
+                    as_type="generation",
+                    model=model,
                     metadata={"attempt": attempt, "provider": "gigachat", "model": model},
-                ):
-                    retry_resp = requests.post(
-                        chat_url,
-                        headers=headers,
-                        json=retry_payload,
-                        timeout=max(timeout_sec, 120),
-                        verify=verify_tls,
-                    )
-            else:
+                )
+                if trace
+                else _noop_context()
+            )
+            with cm_retry as gen_retry:
                 retry_resp = requests.post(
                     chat_url,
                     headers=headers,
@@ -529,13 +708,18 @@ class LLMClient:
                     timeout=max(timeout_sec, 120),
                     verify=verify_tls,
                 )
-            if retry_resp.status_code == 200:
-                retry_data = retry_resp.json()
-                retry_content = ""
-                if isinstance(retry_data, dict):
-                    choices = retry_data.get("choices") or []
-                    if choices and isinstance(choices, list):
-                        retry_content = ((choices[0] or {}).get("message") or {}).get("content") or ""
+                if retry_resp.status_code == 200:
+                    retry_data = retry_resp.json()
+                    if isinstance(retry_data, dict):
+                        choices = retry_data.get("choices") or []
+                        if choices and isinstance(choices, list):
+                            rc = ((choices[0] or {}).get("message") or {}).get("content")
+                            retry_content = rc if isinstance(rc, str) else ("" if rc is None else str(rc))
+                    ru = self._extract_usage_from_payload(retry_data)
+                    self.last_usage = ru
+                    apply_llm_output_to_langfuse_observation(gen_retry, retry_content)
+                    apply_usage_to_langfuse_observation(gen_retry, ru)
+            if retry_resp is not None and retry_resp.status_code == 200 and retry_data is not None:
                 if retry_content:
                     code_retry = extract_typescript_code(retry_content)
                     if code_retry and not looks_like_incomplete_typescript(code_retry) and not self._is_bad_generated_code(

@@ -31,6 +31,7 @@ from app.services.file_parser import ParseFileError, detect_file_kind, extract_e
 from app.services.generation_cache import build_generator_fingerprint, build_input_fingerprint
 from app.services.llm_client import LLMClient
 from app.services.prompt_builder import build_generation_prompt, build_interface_ts
+from app.services.spreadsheet_output_schema import apply_spreadsheet_unmapped_columns_sink
 from app.services.telegram_link_service import consume_link_code, get_user_by_telegram_chat_id, issue_link_code, unlink_telegram
 
 router = APIRouter(tags=["telegram"])
@@ -248,6 +249,8 @@ async def telegram_generate(
                 contents,
             )
         )
+        if file_kind in {"csv", "xls", "xlsx"}:
+            schema_obj = apply_spreadsheet_unmapped_columns_sink(schema_obj)
         interface_ts = build_interface_ts(schema_obj)
         prompt = build_generation_prompt(
             extracted_input_json,
