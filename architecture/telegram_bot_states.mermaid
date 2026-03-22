@@ -1,0 +1,22 @@
+stateDiagram-v2
+    [*] --> Idle
+
+    Idle --> Linking: /link XXXXXX
+    Linking --> Idle: Success
+    Linking --> Idle: Failure
+
+    Idle --> Profile: /profile or "Профиль"
+    Profile --> Idle
+
+    Idle --> GenerateMenu: /generate or "Генерация"
+    GenerateMenu --> WaitingFile: User selects generate
+    WaitingFile --> WaitingSchema: File received
+    WaitingSchema --> Generating: Schema received
+    Generating --> Idle: Generation complete
+
+    Idle --> Idle: Unlinked user tries generate -> Explain linking
+
+    note right of Idle
+        User can be linked or unlinked.
+        Unlinked users see linking instructions.
+    end note

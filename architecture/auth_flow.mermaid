@@ -1,0 +1,32 @@
+sequenceDiagram
+    participant U as User
+    participant F as Frontend
+    participant B as Backend
+    participant DB as Database
+    participant E as Email Service
+
+    U->>F: Register (email, login, password)
+    F->>B: POST /auth/register
+    B->>DB: Create user (unverified)
+    B->>E: Send verification code
+    B-->>F: Success message
+    F-->>U: Check email
+
+    U->>F: Verify email (code)
+    F->>B: POST /auth/verify-email
+    B->>DB: Mark email verified
+    B-->>F: Success
+    F-->>U: Can login now
+
+    U->>F: Login (login/email, password)
+    F->>B: POST /auth/login
+    B->>DB: Validate credentials
+    B-->>F: access_token, refresh_token
+    F-->>U: Logged in
+
+    Note over F: Tokens stored in localStorage/cookies
+
+    U->>F: Access protected route
+    F->>B: Request with Bearer token
+    B->>B: Validate JWT
+    B-->>F: Data or 401

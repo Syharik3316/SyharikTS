@@ -10,7 +10,6 @@ def truncate_string(s: str, max_len: int) -> str:
 
 
 def to_compact_json(obj: Any, *, ensure_ascii: bool = False) -> str:
-    # Compact JSON to reduce prompt size.
     return json.dumps(obj, ensure_ascii=ensure_ascii, separators=(",", ":"))
 
 
@@ -23,8 +22,6 @@ def extract_typescript_code(text: str) -> str:
     if not text:
         return ""
 
-    # Prefer fenced code blocks.
-    # Model may return ```ts, ```typescript, ``` or ```<language>.
     fence_match = re.search(
         r"```(?:[a-zA-Z0-9_-]+)?\s*([\s\S]*?)\s*```",
         text,
@@ -34,7 +31,6 @@ def extract_typescript_code(text: str) -> str:
         code = fence_match.group(1).strip()
         return code
 
-    # Fallback: try to locate an "export default function" segment.
     export_default = re.search(
         r"(export\s+default\s+function[\s\S]*$)", text, flags=re.IGNORECASE
     )
@@ -56,11 +52,9 @@ def looks_like_incomplete_typescript(code: str) -> bool:
     if stripped.endswith(",") or stripped.endswith(":") or stripped.endswith("="):
         return True
 
-    # Very common truncation pattern from mapping line.
     if 'get(row, "' in stripped and not stripped.endswith("}"):
         return True
 
-    # Rough balance checks.
     if code.count("{") != code.count("}"):
         return True
     if code.count("(") != code.count(")"):
@@ -99,7 +93,6 @@ def best_match_key(target_key: str, candidates: Iterable[str]) -> Optional[str]:
         if nc == target:
             return c
 
-        # Substring heuristics.
         score = 0
         if target in nc or nc in target:
             score += 2

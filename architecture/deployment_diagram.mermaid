@@ -1,0 +1,26 @@
+graph TB
+    subgraph "Host Machine"
+        subgraph "Docker Containers"
+            A[Backend (FastAPI)] --> B[PostgreSQL DB]
+            C[Telegram Bot (aiogram)] --> A
+            D[Frontend (Nginx serving static)] --> A
+        end
+
+        E[Nginx Reverse Proxy] --> A
+        E --> D
+
+        F[User Browser] --> E
+        G[Telegram API] --> C
+    end
+
+    subgraph "External Services"
+        H[LLM API (GigaChat/OpenAI)]
+        I[Email SMTP]
+        J[Google Recaptcha]
+        K[Langfuse Monitoring]
+    end
+
+    A --> H
+    A --> I
+    A --> J
+    A --> K

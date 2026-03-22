@@ -49,7 +49,6 @@ export async function updateProfileRequest(params: {
   if (!res.ok) {
     const { status, detail, code } = await parseBackendError(res);
     let userMessage = mapStatusToUserMessage(status, detail, code);
-    // For profile update we prefer backend detail (e.g. wrong current_password).
     if (status === 401 && typeof detail === 'string' && detail.trim()) {
       userMessage = detail;
     }

@@ -55,7 +55,6 @@ def _coerce_schema_to_dict(schema_obj: Any) -> dict[str, Any] | None:
 
 
 def _estimate_tokens_from_text(text: str) -> int:
-    # Rough cross-provider estimate: ~4 chars per token for mixed text/code payloads.
     compact = text or ""
     return max(1, (len(compact) + 3) // 4)
 
@@ -84,7 +83,6 @@ async def _find_cached_generation(
 def _validate_generated_code_shape(*, code: str, schema_obj: Any, file_kind: str) -> None:
     schema_dict = _coerce_schema_to_dict(schema_obj)
     if schema_dict is None:
-        # Invalid schemas are rejected earlier; shape gate should stay non-fatal.
         return
 
     low = code.lower()
@@ -260,7 +258,6 @@ async def generate(
             )
         llm_duration_ms = int((time.perf_counter() - llm_started) * 1000)
     except Exception as e:
-        # Non-hardcoded safety net: deterministic local generator uses current schema + extracted payload.
         try:
             client = LLMClient()
             client._active_trace = trace
@@ -285,7 +282,6 @@ async def generate(
     completion_tokens = int(usage.get("completion_tokens") or 0)
     total_tokens = int(usage.get("total_tokens") or (prompt_tokens + completion_tokens))
     if total_tokens <= 0:
-        # Some providers do not return usage in response payload.
         prompt_tokens = _estimate_tokens_from_text(prompt)
         completion_tokens = _estimate_tokens_from_text(code)
         total_tokens = prompt_tokens + completion_tokens

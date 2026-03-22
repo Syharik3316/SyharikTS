@@ -4,7 +4,6 @@ _ROUNDS = 12
 
 
 def _secret_bytes(plain: str) -> bytes:
-    # Bcrypt uses at most the first 72 bytes of the password.
     return plain.encode("utf-8")[:72]
 
 

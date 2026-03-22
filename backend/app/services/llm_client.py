@@ -76,7 +76,6 @@ def _collect_schema_keys(schema_obj: Any) -> set[str]:
     keys: set[str] = set()
     for k in schema.keys():
         keys.add(str(k))
-    # input-wrapper schema also has nested object keys.
     input_val = schema.get("input")
     if isinstance(input_val, list) and input_val and isinstance(input_val[0], dict):
         for k in input_val[0].keys():
@@ -132,7 +131,6 @@ class LLMClient:
         raise ValueError(f"Unsupported LLM_PROVIDER: {self.provider}")
 
     def _coerce_value(self, value: Any, example: Any) -> Any:
-        # Use the *type* of the schema example to coerce values.
         if isinstance(example, bool):
             if isinstance(value, bool):
                 return value
@@ -149,11 +147,9 @@ class LLMClient:
         if value is None:
             return ""
 
-        # Default: stringification.
         if isinstance(example, str):
             return str(value)
 
-        # For null/objects/arrays we keep raw.
         return value
 
     def _is_bad_generated_code(self, code: str, *, file_kind: str, schema_obj: Any | None = None) -> bool:
@@ -176,7 +172,6 @@ class LLMClient:
         if "\\p{l}" in low or "\\p{n}" in low:
             return True
 
-        # Require at least basic runtime csv flow.
         has_decode = "decodebase64" in low or "buffer.from(base64file" in low or "atob(" in low
         has_parse = "parsecsv" in low or "split(';')" in low or "separator" in low
         has_typed_return = "dealdata[]" in code
@@ -185,7 +180,6 @@ class LLMClient:
                 return True
 
         if file_kind in document_kinds:
-            # Doc formats should not regress into CSV parser templates.
             if "parsecsv" in low or "split(';')" in low or "separator" in low:
                 return True
             if "const csv = decodebase64(base64file)" in low:
@@ -207,7 +201,6 @@ class LLMClient:
             if "input:" not in low and '"input"' not in low:
                 return True
 
-        # Reject generated code that hardcodes known CRM keys absent in user schema.
         if schema:
             schema_keys = _collect_schema_keys(schema_obj)
             known_keys = set(_CRM_HEADER_ALIASES.keys())
@@ -447,20 +440,6 @@ class LLMClient:
 
     def _generate_via_gigachat(self, prompt: str, *, file_kind: str, schema_obj: Any) -> str:
         trace = self._active_trace
-        """
-        GigaChat via Authorization key (OAuth) + REST chat completions.
-
-        Реализует логику из ваших примеров:
-          1) POST https://ngw.devices.sberbank.ru:9443/api/v2/oauth -> access_token
-          2) POST {GIGACHAT_BASE_URL}/chat/completions -> content
-
-        Для работы нужен минимум:
-          - GIGACHAT_AUTHORIZATION_KEY (ключ авторизации; Basic base64 из личного кабинета)
-          - GIGACHAT_MODEL (опционально; иначе используется дефолт)
-
-        TLS: GigaChat иногда требует отключения проверки сертификатов из-за самоподписанных цепочек.
-        Управляется через env `GIGACHAT_VERIFY_TLS` (по умолчанию `false`).
-        """
 
         base_url = (os.getenv("GIGACHAT_BASE_URL") or "https://gigachat.devices.sberbank.ru/api/v1").strip().rstrip("/")
         model = (os.getenv("GIGACHAT_MODEL") or "").strip() or "GigaChat-2-Max"
@@ -785,7 +764,6 @@ class LLMClient:
             scope_candidates: List[str] = []
             if configured_scope:
                 scope_candidates.append(configured_scope)
-            # Keep backward compatibility with setups where only AUTHORIZATION_KEY was configured.
             for candidate in ["GIGACHAT_API_PERS", "GIGACHAT_API_B2B", "GIGACHAT_API_CORP"]:
                 if candidate not in scope_candidates:
                     scope_candidates.append(candidate)
@@ -806,7 +784,6 @@ class LLMClient:
                     )
                     if resp.status_code == 200:
                         break
-                    # OAuth endpoint can burst-limit; retry same scope with backoff.
                     if resp.status_code == 429 and attempt < max(0, oauth_retry_attempts - 1):
                         attempt += 1
                         time.sleep((oauth_retry_delay_ms * attempt) / 1000.0)
@@ -828,7 +805,6 @@ class LLMClient:
                 if resp.status_code == 429:
                     raise RuntimeError(f"GIGACHAT_RATE_LIMIT: GigaChat OAuth error 429: {details}")
 
-                # For non-scope errors don't continue; fail fast.
                 if "scope from db not fully includes consumed scope" not in details:
                     raise RuntimeError(f"GigaChat OAuth error {resp.status_code}: {details}")
 
@@ -883,7 +859,6 @@ class LLMClient:
                 val = data.get(key)
                 if isinstance(val, int):
                     return max(0, val)
-            # Common response shape: {"tokens":[{"tokens":123}]}
             maybe_tokens = data.get("tokens")
             if isinstance(maybe_tokens, list) and maybe_tokens:
                 first = maybe_tokens[0]

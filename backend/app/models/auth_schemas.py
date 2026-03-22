@@ -105,7 +105,6 @@ class ProfileUpdateRequest(BaseModel):
     @field_validator("new_password")
     @classmethod
     def validate_new_password(cls, v: str | None) -> str | None:
-        # pydantic Field(min_length=8) handles minimal length; keep hook for future extensions.
         return v
 
 

@@ -18,16 +18,20 @@ export type TokenResponse = {
 };
 
 export async function loginRequest(login_or_email: string, password: string): Promise<TokenResponse> {
+  
   const res = await fetch(apiUrl("/auth/login"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ login_or_email, password }),
   });
+
   const data = await res.json().catch(() => ({}));
+
   if (!res.ok) {
     const detail = typeof data?.detail === "string" ? data.detail : res.statusText;
     throw new Error(detail || "Login failed");
   }
+
   return data as TokenResponse;
 }
 
@@ -42,11 +46,14 @@ export async function registerRequest(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, login, password, recaptcha_token }),
   });
+
   const data = await res.json().catch(() => ({}));
+
   if (!res.ok) {
     const detail = typeof data?.detail === "string" ? data.detail : res.statusText;
     throw new Error(detail || "Registration failed");
   }
+
   return data as { message: string };
 }
 
@@ -66,23 +73,31 @@ export async function resendRegistrationCode(email: string): Promise<{ message: 
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email }),
   });
+  
   const data = await res.json().catch(() => ({}));
+  
   if (res.status === 429) {
+    
     const detail = data?.detail;
+    
     const retry =
       typeof detail === "object" && detail !== null && typeof detail.retry_after_seconds === "number"
         ? detail.retry_after_seconds
         : 60;
-    const msg =
+    
+        const msg =
       typeof detail === "object" && detail !== null && typeof detail.message === "string"
         ? detail.message
         : "Подождите перед повторной отправкой.";
-    throw new ResendCooldownError(msg, retry);
+    
+        throw new ResendCooldownError(msg, retry);
   }
+  
   if (!res.ok) {
     const detail = typeof data?.detail === "string" ? data.detail : res.statusText;
     throw new Error(detail || "Request failed");
   }
+  
   return data as { message: string };
 }
 
@@ -92,25 +107,32 @@ export async function verifyEmailRequest(email: string, code: string): Promise<{
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, code }),
   });
+  
   const data = await res.json().catch(() => ({}));
+  
   if (!res.ok) {
     const detail = typeof data?.detail === "string" ? data.detail : res.statusText;
     throw new Error(detail || "Verification failed");
   }
+  
   return data as { message: string };
 }
 
 export async function resetRequest(email: string, recaptcha_token: string | null): Promise<{ message: string }> {
+  
   const res = await fetch(apiUrl("/auth/reset-request"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, recaptcha_token }),
   });
+  
   const data = await res.json().catch(() => ({}));
+  
   if (!res.ok) {
     const detail = typeof data?.detail === "string" ? data.detail : res.statusText;
     throw new Error(detail || "Request failed");
   }
+  
   return data as { message: string };
 }
 
@@ -120,11 +142,14 @@ export async function resetConfirm(email: string, code: string, new_password: st
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, code, new_password }),
   });
+  
   const data = await res.json().catch(() => ({}));
+  
   if (!res.ok) {
     const detail = typeof data?.detail === "string" ? data.detail : res.statusText;
     throw new Error(detail || "Reset failed");
   }
+  
   return data as { message: string };
 }
 
@@ -132,11 +157,14 @@ export async function fetchMe(accessToken: string): Promise<UserPublic> {
   const res = await fetch(apiUrl("/auth/me"), {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
+  
   const data = await res.json().catch(() => ({}));
+  
   if (!res.ok) {
     const detail = typeof data?.detail === "string" ? data.detail : res.statusText;
     throw new Error(detail || "Failed to load user");
   }
+  
   return data as UserPublic;
 }
 

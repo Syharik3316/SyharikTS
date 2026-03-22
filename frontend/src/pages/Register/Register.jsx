@@ -136,7 +136,7 @@ export default function Register() {
       try {
         sessionStorage.setItem(PENDING_VERIFY_EMAIL_KEY, email.trim());
       } catch {
-        /* ignore */
+        //Fuck PotJoke
       }
       navigate('/verify-email', { replace: true });
     } catch (err) {

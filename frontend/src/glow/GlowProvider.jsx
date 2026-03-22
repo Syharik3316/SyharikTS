@@ -13,13 +13,11 @@ export function useGlow() {
 export function GlowProvider({ children }) {
   const hideTimerRef = useRef(0);
 
-  // Одна “живущая” область свечения: при hover позиция обновляется,
-  // а при клике — быстро угасает.
   const [pulse, setPulse] = useState({
     x: 0,
     y: 0,
     visible: false,
-    variant: 'click', // 'click' | 'hover'
+    variant: 'click',
   });
   const [cursorGlow, setCursorGlow] = useState({
     x: 0,
@@ -38,8 +36,6 @@ export function GlowProvider({ children }) {
     });
 
     if (variant === 'hover') {
-      // Не исчезаем сразу при переключении на другой объект:
-      // если hover продолжается, мы будем получать новые triggerGlow и таймер сбросится.
       hideTimerRef.current = window.setTimeout(() => {
         setPulse((p) => ({ ...p, visible: false }));
       }, 1200);

@@ -2,9 +2,6 @@ import React from 'react';
 import styles from './BackendResultPanel.module.css';
 import { copyTextToClipboard, downloadTextFile, stripFileExt } from '../../utils/fileCopyDownload';
 
-/**
- * Панель вывода текста с backend (загрузка / ошибка / содержимое).
- */
 export default function BackendResultPanel({
   title = 'Ответ сервера',
   text,

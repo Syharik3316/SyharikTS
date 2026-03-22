@@ -17,7 +17,6 @@ def _read_psm() -> int:
 
 
 def _normalize_ocr_text(text: str) -> str:
-    # Keep line breaks for downstream prompt quality, but trim noisy spacing.
     lines = [ln.strip() for ln in (text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")]
     return "\n".join([ln for ln in lines if ln])
 
@@ -32,7 +31,6 @@ def transcribe_image_with_ocr(contents: bytes, file_kind: str) -> str:
     psm = _read_psm()
     config = f"--oem 1 --psm {psm}"
     if file_kind == "tiff":
-        # TIFF scans are often sparse forms where this psm is usually more stable.
         config = f"--oem 1 --psm {(os.getenv('OCR_FALLBACK_PSM') or '4').strip() or '4'}"
 
     with Image.open(BytesIO(contents)) as img:

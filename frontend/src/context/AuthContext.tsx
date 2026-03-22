@@ -39,7 +39,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             return;
           }
         } catch {
-          /* fall through */
+          //Nothing LMAO #PotJoke asked to fix dis goddamn shit
         }
       }
       clearTokens();

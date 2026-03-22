@@ -32,22 +32,16 @@ async def lifespan(_app: FastAPI):
 def create_app() -> FastAPI:
     app = FastAPI(title="Converter Agent MVP", version="0.1.0", lifespan=lifespan)
 
-    # For MVP: allow all origins by default.
-    # In production you should tighten this.
     cors_origins = os.getenv("CORS_ALLOW_ORIGINS", "*")
     if cors_origins.strip() == "*":
         allow_origins = ["*"]
     else:
-        # Comma-separated origins list.
         allow_origins = [o.strip() for o in cors_origins.split(",") if o.strip()]
 
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allow_origins,
-        # For MVP мы не используем cookie/credentials в fetch, поэтому
-        # отключаем allow_credentials, чтобы не получить некорректный
-        # CORS заголовок при allow_origins="*".
-        allow_credentials=False,
+       allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )

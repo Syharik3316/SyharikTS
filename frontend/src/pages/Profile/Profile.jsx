@@ -52,7 +52,6 @@ export default function Profile() {
   useEffect(() => {
     loadHistory();
     loadTelegramStatus();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function loadTelegramStatus() {

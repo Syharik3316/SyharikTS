@@ -1,0 +1,54 @@
+graph TD
+    subgraph BACKEND
+        A[Auth Service]
+        B[JWT Tokens]
+        C[File Parser Service]
+        D[Supported Formats]
+        E[LLM Client Service]
+        F[LLM Providers]
+        G[Generation Cache Service]
+        H[Fingerprint Cache]
+        I[Email Service]
+        J[SMTP]
+        K[Recaptcha Service]
+        L[Google Recaptcha]
+        M[Langfuse Client]
+        N[Tracing]
+        O[Prompt Builder]
+        P[Prompt Templates]
+        Q[Schema Inferer]
+        R[JSON Schema]
+        A --> B
+        C --> D
+        E --> F
+        G --> H
+        I --> J
+        K --> L
+        M --> N
+        O --> P
+        Q --> R
+    end
+
+    subgraph FRONTEND
+        S[Auth Context]
+        T[Token Management]
+        U[API Client]
+        V[HTTP Requests]
+        W[File Upload]
+        X[Multipart Forms]
+        S --> T
+        U --> V
+        W --> X
+    end
+
+    subgraph TELEGRAM
+        Y[Bot Dispatcher]
+        Z[Command Handlers]
+        AA[Backend Client]
+        BB[Internal API Calls]
+        CC[State Manager]
+        DD[Per-chat State]
+        Y --> Z
+        AA --> BB
+        CC --> DD
+    end

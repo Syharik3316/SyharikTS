@@ -29,7 +29,6 @@ def _normalize_date_string(s: str) -> str:
         yyyy, mm, dd = m.group(1), m.group(2), m.group(3)
         return f"{yyyy}-{mm}-{dd}"
 
-    # Fallback to example date.
     return "2026-01-01"
 
 
@@ -51,30 +50,25 @@ def _normalize_primitive_value(value: Any, key: str) -> Any:
     if not s:
         return "string"
 
-    # Date-like keys always return ISO string.
     if _DATE_KEY_RE.search(key):
         if _looks_like_date_string(s):
             return _normalize_date_string(s)
         return "2026-01-01"
 
-    # Boolean
     sl = s.lower()
     if sl in {"true", "false"}:
         return False
     if sl in {"yes", "no", "y", "n"}:
         return False
     if sl in {"1", "0"}:
-        # Ambiguous; use number placeholder.
         return 0
 
-    # Number (int/float)
     if _INT_RE.match(s):
         return 0
 
     if _FLOAT_RE.match(s) and any(ch in s for ch in [".", ","]):
         return 0.0
 
-    # Default placeholder: schema example, not real content.
     return "string"
 
 
@@ -98,13 +92,10 @@ def infer_schema_from_extracted(file_kind: str, extracted_input_json: Any) -> Di
                 return {"text": "string", "value": "string"}
             return {"value": "string"}
 
-        # Pick the most meaningful record instead of blindly taking the first one.
-        # This avoids noisy one-column pseudo-rows from complex DOCX tables.
         def _is_meaningful_key(k: str) -> bool:
             ks = str(k or "").strip()
             if not ks:
                 return False
-            # Penalize very long "header-like" keys.
             if len(ks) > 100:
                 return False
             return True
@@ -117,7 +108,6 @@ def infer_schema_from_extracted(file_kind: str, extracted_input_json: Any) -> Di
             keys = [str(k) for k in rec.keys()]
             meaningful_keys = [k for k in keys if _is_meaningful_key(k)]
             score = len(meaningful_keys) * 10 + len(keys)
-            # Strongly penalize single-key noisy rows.
             if len(keys) == 1 and len(str(keys[0])) > 40:
                 score -= 25
             if score > best_score:
@@ -133,6 +123,5 @@ def infer_schema_from_extracted(file_kind: str, extracted_input_json: Any) -> Di
             schema[str(k)] = _normalize_primitive_value(v, str(k))
         return schema
 
-    # Unknown
     return {"value": "string"}
 

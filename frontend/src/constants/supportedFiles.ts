@@ -1,4 +1,3 @@
-/** Mirrors backend `SUPPORTED_FILE_KINDS` in app/services/file_parser.py */
 export const SUPPORTED_FILE_EXTENSIONS = [
   "csv",
   "xls",

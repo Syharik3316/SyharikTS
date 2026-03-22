@@ -11,7 +11,6 @@ export async function copyTextToClipboard(text: string): Promise<void> {
     return;
   }
 
-  // Fallback: copy via hidden textarea.
   const ta = document.createElement("textarea");
   ta.value = t;
   ta.style.position = "fixed";

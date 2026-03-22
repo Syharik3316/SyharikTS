@@ -7,12 +7,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 logger = logging.getLogger(__name__)
 
-# Секунды на установку TCP-сессии к PostgreSQL (asyncpg); иначе /health может «висеть» при дропе пакетов.
 _DB_CONNECT_TIMEOUT = int(os.getenv("DATABASE_CONNECT_TIMEOUT", "10"))
 
 
 def _format_db_error(exc: BaseException) -> str:
-    """Текст для логов и /health: SQLAlchemy/asyncpg часто оборачивают исключения с пустым str()."""
     chunks: list[str] = []
     seen: set[int] = set()
     cur: BaseException | None = exc

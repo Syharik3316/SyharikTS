@@ -31,7 +31,6 @@ async def update_profile(
     if db is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database is not configured")
 
-    # current_password is required even if only login is being updated.
     if not verify_password(body.current_password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid current password")
 
@@ -43,13 +42,11 @@ async def update_profile(
             user.login = body.login.strip()
         if body.new_password is not None:
             user.password_hash = hash_password(body.new_password)
-            # Invalidate refresh tokens after password change.
             await db.execute(delete(RefreshToken).where(RefreshToken.user_id == user.id))
 
         await db.commit()
     except IntegrityError as e:
         await db.rollback()
-        # Uniqueness is enforced by DB indexes: users_login_lower / users_email_lower.
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Login already taken") from e
 
     return UserPublic.model_validate(user)

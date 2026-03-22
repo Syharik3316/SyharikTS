@@ -1,0 +1,67 @@
+graph TB
+    subgraph FRONTEND[Frontend]
+        A[Web App]
+        B[Auth Context]
+        C[API Client]
+        D[Pages]
+        A --> B
+        A --> C
+        A --> D
+    end
+
+    subgraph BACKEND[Backend]
+        E[API Server]
+        F[Auth Router]
+        G[Generate Router]
+        H[Profile Router]
+        I[Telegram Router]
+        J[User Model]
+        K[Generation Service]
+        L[LLM Client]
+        M[File Parser]
+        N[Cache Service]
+        O[Stats Service]
+        E --> F
+        E --> G
+        E --> H
+        E --> I
+        F --> J
+        G --> K
+        K --> L
+        K --> M
+        K --> N
+        H --> O
+    end
+
+    subgraph DATABASE[Database]
+        P[Users Table]
+        Q[Generation History]
+        R[Tokens]
+        S[Telegram Links]
+    end
+
+    subgraph EXTERNAL[External]
+        T[Email Service]
+        U[LLM API]
+        V[Langfuse]
+        W[Recaptcha]
+    end
+
+    subgraph TELEGRAM[Telegram Bot]
+        X[Bot Service]
+        Y[Backend Client]
+        Z[Keyboards & State]
+        X --> Y
+        X --> Z
+    end
+
+    A --> E
+    E --> P
+    E --> Q
+    E --> R
+    E --> S
+    E --> T
+    K --> U
+    K --> V
+    E --> W
+    X --> E

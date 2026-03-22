@@ -19,9 +19,6 @@ export async function fileToBase64(file: File): Promise<string> {
   return bytesToBase64(new Uint8Array(buffer));
 }
 
-/**
- * Transpile TS, run default export on base64 file contents, return formatted JSON preview string.
- */
 export async function runTsCheckWithBase64(codeInput: string, inputBase64: string): Promise<string> {
   const trimmed = inputBase64.trim();
   if (!trimmed) {
@@ -49,7 +46,6 @@ export async function runTsCheckWithBase64(codeInput: string, inputBase64: strin
   const url = URL.createObjectURL(blob);
 
   try {
-    // eslint-disable-next-line no-restricted-globals
     const mod: unknown = await import(/* @vite-ignore */ url);
     const fn = (mod as { default?: unknown })?.default;
     if (typeof fn !== "function") {
@@ -79,9 +75,6 @@ export async function runTsCheckWithBase64(codeInput: string, inputBase64: strin
   }
 }
 
-/**
- * Transpile TS, run default export on base64 file, return formatted JSON preview string.
- */
 export async function runTsCheckOnFile(codeInput: string, inputFile: File): Promise<string> {
   const base64file = await fileToBase64(inputFile);
   return runTsCheckWithBase64(codeInput, base64file);

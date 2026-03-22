@@ -21,9 +21,6 @@ function EyeIcon() {
   );
 }
 
-/**
- * Поле пароля: удержание «глаза» (ЛКМ / касание) показывает символы, отпускание скрывает.
- */
 export default function HoldToRevealPasswordField({
   id,
   label,

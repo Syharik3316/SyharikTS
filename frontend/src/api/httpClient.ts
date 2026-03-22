@@ -91,9 +91,6 @@ function dedupedRefresh(): Promise<boolean> {
   return refreshPromise;
 }
 
-/**
- * Fetch with Bearer access token; on 401 tries refresh once and retries.
- */
 export async function authorizedFetch(path: string, init?: RequestInit): Promise<Response> {
   const url = path.startsWith("http") ? path : apiUrl(path);
   const headers = new Headers(init?.headers);

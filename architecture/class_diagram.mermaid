@@ -1,0 +1,69 @@
+classDiagram
+    class User {
+        + id: UUID
+        + email: String
+        + login: String
+        + password_hash: String
+        + is_email_verified: Boolean
+        + telegram_chat_id: String
+        + telegram_username: String
+        + telegram_first_name: String
+        + telegram_linked_at: DateTime
+        + created_at: DateTime
+        + updated_at: DateTime
+        + verification_codes: List~EmailVerificationCode~
+        + refresh_tokens: List~RefreshToken~
+        + generation_history: List~GenerationHistory~
+        + telegram_link_codes: List~TelegramLinkCode~
+    }
+
+    class EmailVerificationCode {
+        + id: UUID
+        + user_id: UUID
+        + code: String
+        + expires_at: DateTime
+        + created_at: DateTime
+        + user: User
+    }
+
+    class RefreshToken {
+        + id: UUID
+        + user_id: UUID
+        + token_hash: String
+        + expires_at: DateTime
+        + created_at: DateTime
+        + user: User
+    }
+
+    class GenerationHistory {
+        + id: UUID
+        + user_id: UUID
+        + created_at: DateTime
+        + generated_ts_code: String
+        + schema_text: String
+        + main_file_name: String
+        + input_file_base64: String
+        + input_fingerprint: String
+        + generator_fingerprint: String
+        + cache_hit: Boolean
+        + cache_source_generation_id: UUID
+        + prompt_tokens: Int
+        + completion_tokens: Int
+        + total_tokens: Int
+        + user: User
+    }
+
+    class TelegramLinkCode {
+        + id: UUID
+        + user_id: UUID
+        + code: String
+        + expires_at: DateTime
+        + created_at: DateTime
+        + user: User
+    }
+
+    User ||--o{ EmailVerificationCode : has
+    User ||--o{ RefreshToken : has
+    User ||--o{ GenerationHistory : has
+    User ||--o{ TelegramLinkCode : has
+    GenerationHistory --> GenerationHistory : cache_source

@@ -1,0 +1,31 @@
+sequenceDiagram
+    participant U as User
+    participant F as Frontend
+    participant B as Backend API
+    participant FP as File Parser
+    participant GC as Generation Cache
+    participant PB as Prompt Builder
+    participant LC as LLM Client
+    participant DB as Database
+    participant LF as Langfuse
+
+    U->>F: Upload file & schema
+    F->>B: POST /generate (file, schema, auth)
+    B->>FP: Parse file to text/data
+    FP-->>B: Parsed content
+    B->>GC: Check fingerprint cache
+    alt Cache hit
+        GC-->>B: Cached result
+        B-->>F: Return cached TS code
+    else Cache miss
+        B->>PB: Build prompt
+        PB-->>B: Prompt ready
+        B->>LC: Call LLM with prompt
+        LC->>LF: Start trace
+        LC->>LC: Send to LLM API
+        LC-->>B: TS code response
+        B->>DB: Save generation history
+        B->>GC: Store in cache
+        B-->>F: Return TS code
+    end
+    F-->>U: Display generated code

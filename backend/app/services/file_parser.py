@@ -118,7 +118,7 @@ def _to_records_dataframe(df: pd.DataFrame, max_rows: Optional[int]) -> List[Dic
         df = df.head(max_rows)
     df = df.fillna("")
     records = df.to_dict(orient="records")
-    # Ensure all values are strings for compact prompt.
+
     for r in records:
         for k, v in list(r.items()):
             if v is None:
@@ -150,7 +150,7 @@ def _read_csv_dataframe(contents: bytes, *, max_rows: Optional[int]) -> pd.DataF
     """
     Read CSV with delimiter/encoding tolerance.
     """
-    # Try UTF encodings first (common for modern exports), then cp1251 fallback.
+
     decoded_text = ""
     for enc in ("utf-8-sig", "utf-8", "cp1251"):
         try:
@@ -276,7 +276,6 @@ def _extract_epub_text(contents: bytes) -> str:
 
 
 def _extract_doc_text(contents: bytes) -> str:
-    # Legacy .doc is binary; use best-effort extraction without external system tools.
     utf16 = contents.decode("utf-16le", errors="ignore")
     cp = contents.decode("cp1251", errors="ignore")
     mix = f"{utf16}\n{cp}"
@@ -285,9 +284,6 @@ def _extract_doc_text(contents: bytes) -> str:
 
 
 def _normalize_broken_semicolon_rows(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    If parser produced one-column rows like {"a;b;c":"1;2;3"}, expand them.
-    """
     if not records:
         return records
 
@@ -335,7 +331,6 @@ def _records_from_text_key_value(text: str, *, max_rows: Optional[int]) -> List[
 
 
 def _records_from_ocr_text(text: str, *, max_rows: Optional[int]) -> List[Dict[str, Any]]:
-    # 1) Try strict key:value parsing first.
     kv_records = _records_from_text_key_value(text, max_rows=max_rows)
     if kv_records:
         return kv_records
@@ -344,7 +339,6 @@ def _records_from_ocr_text(text: str, *, max_rows: Optional[int]) -> List[Dict[s
     if not lines:
         return []
 
-    # 2) Try question + options block often seen in screenshots/forms.
     q_re = re.compile(r"^\d+[.)]\s*(.+)$")
     opt_re = re.compile(r"^[A-Za-zА-Яа-яЁё0-9][.)]?\s+(.+)$")
     records: List[Dict[str, Any]] = []
@@ -378,7 +372,6 @@ def _records_from_ocr_text(text: str, *, max_rows: Optional[int]) -> List[Dict[s
     if records:
         return _limit_records(records, max_rows) if max_rows is not None else records
 
-    # 3) Last resort: keep first lines as one record, so infer-schema has fields.
     text_preview = " ".join(lines[:6]).strip()
     fallback = [{"content": text_preview}] if text_preview else []
     return _limit_records(fallback, max_rows) if max_rows is not None else fallback
@@ -421,7 +414,6 @@ def _records_from_doc_tables(tables: List[Dict[str, Any]], *, max_rows: Optional
                 kv[current_key] = _merge_value(kv.get(current_key, ""), right)
                 continue
 
-            # Single non-empty cell rows can be useful continuations for current key.
             if current_key and len([c for c in cells if c]) == 1:
                 val = next((c for c in cells if c), "")
                 kv[current_key] = _merge_value(kv.get(current_key, ""), val)
@@ -433,7 +425,7 @@ def _records_from_doc_tables(tables: List[Dict[str, Any]], *, max_rows: Optional
         keys = [str(k or "").strip() for k in row.keys() if str(k or "").strip()]
         unique_keys = {_norm(k) for k in keys if _norm(k)}
         non_empty_values = [str(v or "").strip() for v in row.values() if str(v or "").strip()]
-        # Skip noisy single-header pseudo-rows from DOCX where each row repeats same long key.
+
         if len(unique_keys) <= 1 and len(non_empty_values) <= 1:
             return False
         return True
@@ -463,12 +455,7 @@ def extract_extracted_input_from_bytes(
     max_rows: Optional[int] = None,
     max_text_chars: Optional[int] = None,
 ) -> Tuple[str, Any]:
-    """
-    Same as extract_extracted_input after raw bytes are read from the upload.
 
-    Returns:
-      (file_kind, extractedInputJson)
-    """
     file_kind = detect_file_kind(filename, content_type)
 
     if file_kind in {"csv", "xls", "xlsx"}:
@@ -476,7 +463,6 @@ def extract_extracted_input_from_bytes(
             df = _read_csv_dataframe(contents, max_rows=max_rows)
         elif file_kind in {"xls", "xlsx"}:
             bytes_buf = io.BytesIO(contents)
-            # sheet_name=0 for MVP
             df = pd.read_excel(bytes_buf, nrows=max_rows, dtype=str, sheet_name=0, engine=None)
         else:
             raise ValueError("Unsupported spreadsheet kind")
@@ -540,7 +526,6 @@ def extract_extracted_input_from_bytes(
             try:
                 texts.append(page.extract_text() or "")
             except Exception:
-                # Best-effort extraction
                 texts.append("")
         text = _truncate_text(_normalize_newlines("\n".join(texts).strip()), max_text_chars)
         if not text.strip():
@@ -560,7 +545,6 @@ def extract_extracted_input_from_bytes(
         for p in doc.paragraphs:
             if p.text:
                 paragraphs.append(p.text)
-        # Tables: best-effort, but compact.
         tables: List[Dict[str, Any]] = []
         tables_iter = doc.tables if max_rows is None else doc.tables[: max(1, max_rows)]
         for t in tables_iter:
