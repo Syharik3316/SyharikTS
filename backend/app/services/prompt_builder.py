@@ -103,7 +103,7 @@ def build_interface_ts(schema_obj: Any, *, interface_name: str = "DealData") -> 
     return f"interface {interface_name} {{\n  {body}\n}}"
 
 
-def build_generation_prompt(
+ddef build_generation_prompt(
     extracted_input_json: Any,
     schema_obj: Any,
     *,
@@ -111,9 +111,8 @@ def build_generation_prompt(
     file_kind: str,
 ) -> str:
     schema = ensure_json_object(schema_obj)
-    schema_requires_input_wrapper = isinstance(schema.get("input"), list)
     schema_compact = json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
-    aliases_compact = json.dumps(_build_aliases_for_schema(schema), ensure_ascii=False, separators=(",", ":"))
+    
     payload_obj = ensure_json_object(extracted_input_json) if isinstance(extracted_input_json, dict) else {
         "kind": file_kind,
         "records": extracted_input_json if isinstance(extracted_input_json, list) else [],
@@ -125,40 +124,77 @@ def build_generation_prompt(
     if len(payload_compact) > 12000:
         payload_compact = payload_compact[:12000] + "…"
 
-    # Prompt with explicit function signature stub
+    # Extract field names from schema
+    def get_fields(obj, prefix=""):
+        fields = []
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                fields.append(prefix + k)
+                if isinstance(v, dict):
+                    fields.extend(get_fields(v, prefix + k + "."))
+                elif isinstance(v, list) and v and isinstance(v[0], dict):
+                    fields.extend(get_fields(v[0], prefix + k + "."))
+        return fields
+    schema_fields = get_fields(schema)
+
+    # Sample keys from extracted to help LLM
+    sample_keys = []
+    if payload_obj.get("records") and len(payload_obj["records"]) > 0:
+        record = payload_obj["records"][0]
+        if isinstance(record, dict):
+            sample_keys = list(record.keys())[:10]
+    elif payload_obj.get("tables") and len(payload_obj["tables"]) > 0:
+        table = payload_obj["tables"][0]
+        if isinstance(table, dict) and "headers" in table:
+            sample_keys = table["headers"][:10]
+
     return (
         "Return ONLY TypeScript code. No markdown, no comments, no explanations.\n"
-        "Generate a deterministic TypeScript parser that converts extracted data into the given schema.\n\n"
-        f"// Target interface (must be included in output)\n{interface_ts}\n\n"
-        "// Required function signature (must be exactly as shown)\n"
+        "Generate a deterministic TypeScript parser that converts a base64‑encoded CSV (semicolon separated) into an array of DealData.\n\n"
+        f"{interface_ts}\n\n"
         "export default function (base64file: string): DealData[] {\n"
-        "    const result: DealData[] = [];\n"
-        "    // parsing logic here\n"
-        "    // ...\n"
-        "    return result;\n"
-        "}\n\n"
-        "// Data and configuration for the parser:\n"
-        f"const schema = {schema_compact};\n"
-        f"const aliases: Record<string, string[]> = {aliases_compact};\n"
-        f"const extracted = {payload_compact};\n\n"
-        "// Requirements for the parsing logic:\n"
-        "1. Return [] if base64file is empty after trim.\n"
-        "2. Data priority: extracted.records (array) > extracted.tables[].rows > extracted.text (regex fallback).\n"
-        "3. Field mapping: use aliases for each target key. Normalize strings (lowercase, remove non-alphanumeric, keep Cyrillic).\n"
-        "   - If normalized key/alias length <= 8, require exact normalized match.\n"
-        "   - Otherwise allow substring (normalized source contains normalized target or vice versa).\n"
-        "4. Checkbox values: strings containing [X,x,☑,☒,✓] → boolean true.\n"
-        "5. Type casting: follow the type of the example in schema (string, number, boolean, null, object, array).\n"
-        "   - Use safe conversion: Number() with comma decimal, boolean from truthy strings, etc.\n"
-        "   - For arrays: use first element of schema array as example.\n"
-        "   - For objects: recursively cast each property.\n"
-        "6. Strict keys: output must have exactly the keys present in schema. For missing data, use defaults ('' for string, 0 for number, false for boolean, null for null, [] for array, {} for object).\n"
-        "7. If Array.isArray(schema.input):\n"
-        "   - Output a single object { input: [...] } where each element matches schema.input[0] shape.\n"
-        "   - Populate from each data row (records or table rows).\n"
-        "8. Else: output a single object (still wrapped in an array) using the first row of data (or text fallback).\n"
-        "9. Do not use `as any`. Use proper TypeScript types.\n\n"
-        "Write the complete TypeScript code including the interface and the function, with the function body implementing all requirements."
+        "    if (!base64file.trim()) return [];\n"
+        "    const decode = (s: string): string => { const r=s.trim(), p=r.includes('base64,')?r.slice(r.indexOf('base64,')+7):r, c=p.replace(/\\s/g,'').replace(/-/g,'+').replace(/_/g,'/').replace(/[^A-Za-z0-9+/=]/g,''); const pad=c.length%4; const cl=pad?c+'='.repeat(4-pad):c; try { return typeof Buffer!=='undefined'?Buffer.from(cl,'base64').toString('utf-8'):( ()=>{ const b=atob(cl), u=Uint8Array.from(b,ch=>ch.charCodeAt(0)); return new TextDecoder('utf-8').decode(u); } )(); } catch(e){ return ''; } };\n"
+        "    const parseCSV = (t: string): string[][] => { const r=[]; let row=[], cell='', q=false; for(let i=0;i<t.length;i++){ const ch=t[i]; if(ch=='\"'){ if(q&&t[i+1]=='\"'){cell+='\"';i++;}else q=!q; }else if(ch==';'&&!q){ row.push(cell); cell=''; }else if((ch=='\\n'||ch=='\\r')&&!q){ if(ch=='\\r'&&t[i+1]=='\\n')i++; row.push(cell); cell=''; if(row.some(x=>x!=='')) r.push(row); row=[]; }else cell+=ch; } row.push(cell); if(row.some(x=>x!=='')) r.push(row); return r; };\n"
+        "    const norm = (x: unknown): string => String(x??'').toLowerCase().replace(/[^a-z0-9а-яё]/gi,'');\n"
+        "    const toNum = (x: unknown): number => { const n=Number(String(x??'').trim().replace(/\\s/g,'').replace(',','.')); return isFinite(n)?n:0; };\n"
+        "    const toBool = (x: unknown): boolean => ['1','true','yes','y','да'].includes(String(x??'').trim().toLowerCase());\n"
+        "    const dflt = (ex: unknown): unknown => Array.isArray(ex)?[]:ex===null?null:typeof ex==='number'?0:typeof ex==='boolean'?false:typeof ex==='string'?'':ex&&typeof ex==='object'?Object.fromEntries(Object.entries(ex).map(([k,v])=>[k,dflt(v)])):'';\n"
+        "    const cast = (v: unknown, ex: unknown): unknown => { if(Array.isArray(ex)){ const ie=ex[0]; return Array.isArray(v)?v.map(x=>cast(x,ie)):[]; } if(ex===null){ const t=String(v??'').trim(); return t?String(v):null; } if(typeof ex==='number') return toNum(v); if(typeof ex==='boolean') return toBool(v); if(typeof ex==='string') return String(v??''); if(ex&&typeof ex==='object'){ const src=v&&typeof v==='object'?v as Record<string,unknown>:{}; const o: Record<string,unknown>={}; for(const [k,sub] of Object.entries(ex)) o[k]=cast(src[k],sub); return o; } return v; };\n"
+        "    const schema = " + schema_compact + ";\n"
+        "    // === FILL aliases using sample keys below ===\n"
+        f"    // Sample keys from extracted: {sample_keys}\n"
+        f"    // Schema fields: {', '.join(schema_fields)}\n"
+        "    const aliases: Record<string, string[]> = {\n"
+        "        // Example: organizationName: [\"Наименование организации\", \"organizationName\"],\n"
+        "        // ...\n"
+        "    };\n"
+        "    const pick = (row: Record<string,unknown>, key: string): unknown => { const cand=[key,...(aliases[key]??[])]; for(const c of cand){ const w=norm(c), short=w.length<=8; for(const [rk,rv] of Object.entries(row||{})){ const g=norm(rk); if(g===w) return rv; if(!short&&(g.includes(w)||w.includes(g))) return rv; } } return row[key]; };\n"
+        "    const csv = decode(base64file);\n"
+        "    const table = parseCSV(csv);\n"
+        "    if(table.length===0) return [];\n"
+        "    const headers = table[0].map(h=>String(h??'').trim());\n"
+        "    const idx = new Map<string,number>();\n"
+        "    headers.forEach((h,i)=>idx.set(norm(h),i));\n"
+        "    const keys = Object.keys(schema);\n"
+        "    const isInputArr = Array.isArray(schema.input);\n"
+        "    const itemEx = isInputArr ? ((schema.input as unknown[])[0]??{}) : schema;\n"
+        "    const res: DealData[] = [];\n"
+        "    for(let r=1; r<table.length; r++){\n"
+        "        const line = table[r];\n"
+        "        const obj: Record<string,unknown> = {};\n"
+        "        for(const k of Object.keys(itemEx)){\n"
+        "            const names = [k, ...(aliases[k]??[])];\n"
+        "            let col: number|undefined;\n"
+        "            for(const nm of names){ const found=idx.get(norm(nm)); if(found!==undefined){ col=found; break; } }\n"
+        "            const raw = col===undefined ? '' : String(line[col]??'');\n"
+        "            obj[k] = cast(raw, (itemEx as any)[k]);\n"
+        "        }\n"
+        "        if(isInputArr) res.push({ input: [obj] } as DealData);\n"
+        "        else res.push(obj as DealData);\n"
+        "    }\n"
+        "    return res;\n"
+        "}\n"
     )
 
 
